@@ -1,0 +1,71 @@
+version: "3.9"
+
+services:
+  traefik:
+    image: traefik:v3.6.4
+    container_name: traefik
+    restart: unless-stopped
+
+    command:
+      # Providers
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+
+      # Entrypoints
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.websecure.address=:443
+
+      # Local-only dashboard/API entrypoint
+      - --entrypoints.traefik.address=:8080
+
+      # Dashboard/API (NOT insecure; routed via labels to api@internal)
+      - --api=true
+      - --api.dashboard=true
+
+      # Let's Encrypt (HTTP-01)
+      - --certificatesresolvers.le.acme.email=you@hellofrom.app
+      - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
+
+      # Logs (optional)
+      - --log.level=INFO
+      - --accesslog=true
+
+    ports:
+      - "80:80"
+      - "443:443"
+      # Dashboard exposed ONLY on localhost
+      - "127.0.0.1:8080:8080"
+
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik-letsencrypt:/letsencrypt
+
+    networks:
+      - hf_edge
+      - hf_svc_keycloak
+
+    labels:
+      - traefik.enable=true
+
+      # Define a single localhost-only middleware once, reuse everywhere
+      - traefik.http.middlewares.hf-localonly.ipallowlist.sourcerange=127.0.0.1/32,::1/128
+
+      # Route dashboard/API via the internal service, only on the local entrypoint
+      - traefik.http.routers.traefik-dashboard.rule=PathPrefix(`/dashboard`) || PathPrefix(`/api`)
+      - traefik.http.routers.traefik-dashboard.entrypoints=traefik
+      - traefik.http.routers.traefik-dashboard.service=api@internal
+      - traefik.http.routers.traefik-dashboard.middlewares=hf-localonly@docker
+
+networks:
+  hf_edge:
+    name: hf_edge
+    driver: bridge
+
+  # Private “service” network: Traefik <-> Keycloak only
+  hf_svc_keycloak:
+    name: hf_svc_keycloak
+    driver: bridge
+    internal: true
