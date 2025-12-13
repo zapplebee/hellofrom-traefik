@@ -25,7 +25,7 @@ services:
       - --api.dashboard=true
 
       # Let's Encrypt (HTTP-01)
-      - --certificatesresolvers.le.acme.email=you@hellofrom.app
+      - --certificatesresolvers.le.acme.email=zskalko+hellofrom@gmail.com
       - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
       - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
 
