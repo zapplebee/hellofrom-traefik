@@ -51,7 +51,7 @@ services:
       - traefik.enable=true
 
       # Define a single localhost-only middleware once, reuse everywhere
-      - traefik.http.middlewares.hf-localonly.ipallowlist.sourcerange=127.0.0.1/32,::1/128
+      - traefik.http.middlewares.hf-localonly.ipallowlist.sourcerange=127.0.0.1/32,::1/128,172.17.0.1/32
 
       # Route dashboard/API via the internal service, only on the local entrypoint
       - traefik.http.routers.traefik-dashboard.rule=PathPrefix(`/dashboard`) || PathPrefix(`/api`)
