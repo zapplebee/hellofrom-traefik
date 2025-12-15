@@ -94,7 +94,7 @@ services:
       - traefik.enable=true
 
       # Selected when file-provider sets X-HF-COLOR=blue
-      - traefik.http.routers.hellofrom-blue.rule=Host(`hellofrom.app`) && Headers(`X-HF-COLOR`,`blue`)
+      - traefik.http.routers.hellofrom-blue.rule=Host(`hellofrom.app`) && Header(`X-HF-COLOR`,`blue`)
       - traefik.http.routers.hellofrom-blue.entrypoints=websecure
       - traefik.http.routers.hellofrom-blue.tls=true
       - traefik.http.routers.hellofrom-blue.tls.certresolver=le
@@ -124,7 +124,7 @@ services:
       - traefik.enable=true
 
       # Selected when file-provider sets X-HF-COLOR=green
-      - traefik.http.routers.hellofrom-green.rule=Host(`hellofrom.app`) && Headers(`X-HF-COLOR`,`green`)
+      - traefik.http.routers.hellofrom-green.rule=Host(`hellofrom.app`) && Header(`X-HF-COLOR`,`green`)
       - traefik.http.routers.hellofrom-green.entrypoints=websecure
       - traefik.http.routers.hellofrom-green.tls=true
       - traefik.http.routers.hellofrom-green.tls.certresolver=le
