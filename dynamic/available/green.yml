@@ -6,6 +6,4 @@ http:
         - websecure
       tls:
         certResolver: le
-      middlewares:
-        - hf-route-green@docker
-      service: api@internal
+      service: hellofrom-green@docker

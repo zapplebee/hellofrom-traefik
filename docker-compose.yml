@@ -7,31 +7,24 @@ services:
     restart: unless-stopped
 
     command:
-      # Providers
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
 
-      # File provider (blue/green cutover via dynamic config)
-      # Watches only the "enabled" directory.
       - --providers.file.directory=/etc/traefik/dynamic/enabled
       - --providers.file.watch=true
 
-      # Entrypoints
       - --entrypoints.web.address=:80
       - --entrypoints.web.http.redirections.entrypoint.to=websecure
       - --entrypoints.web.http.redirections.entrypoint.scheme=https
       - --entrypoints.websecure.address=:443
 
-      # Dashboard/API (served ONLY via 443 using api@internal + router labels)
       - --api=true
       - --api.dashboard=true
 
-      # Let's Encrypt (HTTP-01)
       - --certificatesresolvers.le.acme.email=zskalko+hellofrom@gmail.com
       - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
       - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
 
-      # Logs (optional)
       - --log.level=INFO
       - --accesslog=true
 
@@ -42,8 +35,8 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./traefik-letsencrypt:/letsencrypt
-      # dynamic/{available,enabled} live next to this compose file
-      - ./dynamic/enabled:/etc/traefik/dynamic:ro
+      # mount the full dynamic tree so /enabled exists
+      - ./dynamic:/etc/traefik/dynamic:ro
 
     networks:
       - hf_edge
@@ -51,25 +44,14 @@ services:
 
     labels:
       - traefik.enable=true
-
-      # Allowlist for "internal-only" routes (dashboard, keycloak admin, etc.)
-      # Includes:
-      # - localhost
-      # - Docker host bridge IP (from inside containers)
-      # - jumpbox public IP
       - traefik.http.middlewares.hf-localonly.ipallowlist.sourcerange=127.0.0.1/32,::1/128,172.17.0.1/32,207.153.43.69/32
 
-      # Dashboard/API over HTTPS only (443), locked down by IP allowlist
       - traefik.http.routers.traefik-ui.rule=Host(`traefik.hellofrom.app`)
       - traefik.http.routers.traefik-ui.entrypoints=websecure
       - traefik.http.routers.traefik-ui.tls=true
       - traefik.http.routers.traefik-ui.tls.certresolver=le
       - traefik.http.routers.traefik-ui.service=api@internal
       - traefik.http.routers.traefik-ui.middlewares=hf-localonly@docker
-
-      # Middlewares used for blue/green selection (file provider router will apply one)
-      - traefik.http.middlewares.hf-route-blue.headers.customrequestheaders.X-HF-COLOR=blue
-      - traefik.http.middlewares.hf-route-green.headers.customrequestheaders.X-HF-COLOR=green
 
   hellofrom_blue:
     image: oven/bun:1.3.3
@@ -92,13 +74,6 @@ services:
 
     labels:
       - traefik.enable=true
-
-      # Selected when file-provider sets X-HF-COLOR=blue
-      - traefik.http.routers.hellofrom-blue.rule=Host(`hellofrom.app`) && Header(`X-HF-COLOR`,`blue`)
-      - traefik.http.routers.hellofrom-blue.entrypoints=websecure
-      - traefik.http.routers.hellofrom-blue.tls=true
-      - traefik.http.routers.hellofrom-blue.tls.certresolver=le
-      - traefik.http.routers.hellofrom-blue.service=hellofrom-blue
       - traefik.http.services.hellofrom-blue.loadbalancer.server.port=5173
 
   hellofrom_green:
@@ -122,13 +97,6 @@ services:
 
     labels:
       - traefik.enable=true
-
-      # Selected when file-provider sets X-HF-COLOR=green
-      - traefik.http.routers.hellofrom-green.rule=Host(`hellofrom.app`) && Header(`X-HF-COLOR`,`green`)
-      - traefik.http.routers.hellofrom-green.entrypoints=websecure
-      - traefik.http.routers.hellofrom-green.tls=true
-      - traefik.http.routers.hellofrom-green.tls.certresolver=le
-      - traefik.http.routers.hellofrom-green.service=hellofrom-green
       - traefik.http.services.hellofrom-green.loadbalancer.server.port=5173
 
 networks:
@@ -136,7 +104,6 @@ networks:
     name: hf_edge
     driver: bridge
 
-  # Private “service” network: Traefik <-> Keycloak only
   hf_svc_keycloak:
     name: hf_svc_keycloak
     driver: bridge
