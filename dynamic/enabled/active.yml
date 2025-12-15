@@ -1,0 +1,11 @@
+http:
+  routers:
+    hellofrom-live:
+      rule: Host(`hellofrom.app`)
+      entryPoints:
+        - websecure
+      tls:
+        certResolver: le
+      middlewares:
+        - hf-route-green@docker
+      service: api@internal

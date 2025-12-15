@@ -2460,6 +2460,11 @@ var r = app.use("/api/*", async (c, next) => {
   console.log("v2");
   return c.json({ foo: 2 });
 });
+app.get("/_health", (c) => {
+  const colorHeader = c.req.header("x-hf-color") ?? "unspecified";
+  const colorEnv = process.env?.COLOR ?? "unspecified";
+  return c.json({ colorHeader, colorEnv });
+});
 if (false) {}
 var server_default = {
   fetch: app.fetch,
