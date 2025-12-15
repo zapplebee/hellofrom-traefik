@@ -6,4 +6,4 @@ http:
         - websecure
       tls:
         certResolver: le
-      service: hellofrom-blue@docker
+      service: hellofrom-green@docker
