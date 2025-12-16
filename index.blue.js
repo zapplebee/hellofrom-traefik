@@ -2116,6 +2116,7 @@ function jsxDEV(tag, props, key) {
 }
 
 // src/server/cdn.tsx
+var ENABLE_CDN = Boolean(process.env.ENABLE_CDN);
 var CDN_BASE = (Bun.env.CDN_BASE ?? "http://localhost:4500").replace(/\/+$/, "");
 var state = {
   base: CDN_BASE,
@@ -2166,7 +2167,7 @@ async function refreshManifestOnce() {
   }
 }
 async function initCdnManifest(opts) {
-  if (Boolean(Bun.env.CDN_BASE)) {
+  if (ENABLE_CDN) {
     if (opts?.base)
       state.base = opts.base.replace(/\/+$/, "");
     if (opts?.manifestUrl)
@@ -2201,7 +2202,7 @@ function resolveEntryKey(src, manifest) {
   return null;
 }
 function CDN(props) {
-  if (!Boolean(Bun.env.CDN_BASE)) {
+  if (!ENABLE_CDN) {
     return /* @__PURE__ */ jsxDEV("script", {
       type: "module",
       src: props.src
@@ -2237,7 +2238,7 @@ function CDN(props) {
   }, undefined, true, undefined, this);
 }
 function Preamble() {
-  if (!Boolean(Bun.env.CDN_BASE)) {
+  if (!ENABLE_CDN) {
     return /* @__PURE__ */ jsxDEV(Fragment, {
       children: [
         raw(`
@@ -2259,8 +2260,7 @@ window.$RefreshSig$ = () => (type) => type;</script>
 }
 function CDNBrandImage({ src, ...rest }) {
   const parsed = parse(src);
-  console.log(parsed);
-  if (!Boolean(Bun.env.CDN_BASE)) {
+  if (!ENABLE_CDN) {
     return /* @__PURE__ */ jsxDEV("img", {
       src: `/brandimages/${parsed.base}`,
       ...rest
