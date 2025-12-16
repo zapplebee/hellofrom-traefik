@@ -27,16 +27,18 @@ services:
 
       - --log.level=INFO
       - --accesslog=true
+      - --accesslog.format=json
+      - --accesslog.fields.defaultmode=keep
 
-      - "--accesslog.format=json"
-      - "--accesslog.fields.defaultmode=keep"
-      - "--accesslog.fields.headers.defaultmode=drop"
+      # headers: drop everything, then explicitly keep a few
+      - --accesslog.fields.headers.defaultmode=drop
+      - --accesslog.fields.headers.names.X-Forwarded-For=keep
+      - --accesslog.fields.headers.names.X-Request-Id=keep
+      - --accesslog.fields.headers.names.User-Agent=keep
 
-      # Keep useful headers
-      - "--accesslog.fields.headers.names.X-Forwarded-For=keep"
-      - "--accesslog.fields.headers.names.X-Request-Id=keep"
-      - "--accesslog.fields.headers.names.User-Agent=keep"
-
+      # keep router/service identity
+      - --accesslog.fields.names.RouterName=keep
+      - --accesslog.fields.names.ServiceName=keep
     ports:
       - "80:80"
       - "443:443"
