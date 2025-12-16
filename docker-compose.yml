@@ -67,7 +67,7 @@ services:
 
     environment:
       - COLOR=blue
-      - NODE_ENV=prod
+      - NODE_ENV=prov
       - CDN_BASE=https://dev.hellofrom.pages.dev
       - ENABLE_TRACKING=1
 
@@ -92,7 +92,7 @@ services:
 
     environment:
       - COLOR=green
-      - NODE_ENV=prod
+      - NODE_ENV=prov
       - CDN_BASE=https://dev.hellofrom.pages.dev
 
     networks:
