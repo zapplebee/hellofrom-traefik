@@ -41,6 +41,7 @@ services:
     networks:
       - hf_edge
       - hf_svc_keycloak
+      - hf_svc_umami
 
     labels:
       - traefik.enable=true
