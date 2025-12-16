@@ -42,6 +42,7 @@ services:
       - hf_edge
       - hf_svc_keycloak
       - hf_svc_umami
+      - hf_svc_openobserve
 
     labels:
       - traefik.enable=true
@@ -115,5 +116,10 @@ networks:
 
   hf_svc_umami:
     name: hf_svc_umami
+    driver: bridge
+    internal: true
+
+  hf_svc_openobserve:
+    name: hf_svc_openobserve
     driver: bridge
     internal: true
