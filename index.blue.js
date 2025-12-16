@@ -2136,8 +2136,50 @@ function joinUrl(base, path) {
   const p = path.startsWith("/") ? path : `/${path}`;
   return `${b}${p}`;
 }
+async function refreshManifestOnce() {
+  if (state._refreshing)
+    return;
+  state._refreshing = true;
+  try {
+    const headers = {};
+    if (state.etag)
+      headers["If-None-Match"] = state.etag;
+    const res = await fetch(state.manifestUrl, { headers });
+    if (res.status === 304) {
+      state.lastError = null;
+      state.lastLoadedAt = Date.now();
+      return;
+    }
+    if (!res.ok) {
+      throw new Error(`manifest fetch failed: ${res.status} ${res.statusText}`);
+    }
+    const etag = res.headers.get("etag");
+    const json = await res.json();
+    state.manifest = json;
+    state.etag = etag;
+    state.lastLoadedAt = Date.now();
+    state.lastError = null;
+  } catch (e) {
+    state.lastError = e instanceof Error ? e.message : String(e);
+  } finally {
+    state._refreshing = false;
+  }
+}
 async function initCdnManifest(opts) {
-  if (false) {}
+  if (Boolean(Bun.env.CDN_BASE)) {
+    if (opts?.base)
+      state.base = opts.base.replace(/\/+$/, "");
+    if (opts?.manifestUrl)
+      state.manifestUrl = opts.manifestUrl;
+    if (opts?.pollMs)
+      state.pollMs = opts.pollMs;
+    await refreshManifestOnce();
+    if (!state._timer) {
+      state._timer = setInterval(() => {
+        refreshManifestOnce();
+      }, state.pollMs);
+    }
+  }
 }
 function resolveEntryKey(src, manifest) {
   if (manifest[src]?.isEntry)
@@ -2159,7 +2201,7 @@ function resolveEntryKey(src, manifest) {
   return null;
 }
 function CDN(props) {
-  if (true) {
+  if (!Boolean(Bun.env.CDN_BASE)) {
     return /* @__PURE__ */ jsxDEV("script", {
       type: "module",
       src: props.src
@@ -2195,7 +2237,7 @@ function CDN(props) {
   }, undefined, true, undefined, this);
 }
 function Preamble() {
-  if (true) {
+  if (!Boolean(Bun.env.CDN_BASE)) {
     return /* @__PURE__ */ jsxDEV(Fragment, {
       children: [
         raw(`
@@ -2218,7 +2260,7 @@ window.$RefreshSig$ = () => (type) => type;</script>
 function CDNBrandImage({ src, ...rest }) {
   const parsed = parse(src);
   console.log(parsed);
-  if (true) {
+  if (!Boolean(Bun.env.CDN_BASE)) {
     return /* @__PURE__ */ jsxDEV("img", {
       src: `/brandimages/${parsed.base}`,
       ...rest
@@ -2416,11 +2458,13 @@ var cutout_simple_hellofromapp_classy_512_default = "./cutout-simple-hellofromap
 
 // src/server/index.tsx
 console.log(cutout_simple_hellofromapp_classy_512_default);
-await initCdnManifest({
-  base: Bun.env.CDN_BASE ?? "http://localhost:4500",
-  manifestUrl: `${Bun.env.CDN_BASE ?? "http://localhost:4500"}/manifest.json`,
-  pollMs: 2000
-});
+if (Boolean(Bun.env.CDN_BASE)) {
+  await initCdnManifest({
+    base: Bun.env.CDN_BASE ?? "http://localhost:4500",
+    manifestUrl: `${Bun.env.CDN_BASE ?? "http://localhost:4500"}/manifest.json`,
+    pollMs: 2000
+  });
+}
 var app = new Hono2;
 app.get("/", (c) => c.html(/* @__PURE__ */ jsxDEV("html", {
   lang: "en",
@@ -2569,7 +2613,7 @@ if (process.env.ENABLE_TRACKING) {
     });
   });
 }
-if (true) {
+if (!Boolean(Bun.env.CDN_BASE)) {
   app.all("*", (c) => {
     return proxy(`http://localhost:4500${c.req.path}`, {
       ...c.req
