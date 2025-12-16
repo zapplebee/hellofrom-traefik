@@ -1,0 +1,2585 @@
+// @bun
+var __defProp = Object.defineProperty;
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, {
+      get: all[name],
+      enumerable: true,
+      configurable: true,
+      set: (newValue) => all[name] = () => newValue
+    });
+};
+
+// node_modules/hono/dist/compose.js
+var compose = (middleware, onError, onNotFound) => {
+  return (context, next) => {
+    let index = -1;
+    return dispatch(0);
+    async function dispatch(i) {
+      if (i <= index) {
+        throw new Error("next() called multiple times");
+      }
+      index = i;
+      let res;
+      let isError = false;
+      let handler;
+      if (middleware[i]) {
+        handler = middleware[i][0][0];
+        context.req.routeIndex = i;
+      } else {
+        handler = i === middleware.length && next || undefined;
+      }
+      if (handler) {
+        try {
+          res = await handler(context, () => dispatch(i + 1));
+        } catch (err) {
+          if (err instanceof Error && onError) {
+            context.error = err;
+            res = await onError(err, context);
+            isError = true;
+          } else {
+            throw err;
+          }
+        }
+      } else {
+        if (context.finalized === false && onNotFound) {
+          res = await onNotFound(context);
+        }
+      }
+      if (res && (context.finalized === false || isError)) {
+        context.res = res;
+      }
+      return context;
+    }
+  };
+};
+
+// node_modules/hono/dist/http-exception.js
+var HTTPException = class extends Error {
+  res;
+  status;
+  constructor(status = 500, options) {
+    super(options?.message, { cause: options?.cause });
+    this.res = options?.res;
+    this.status = status;
+  }
+  getResponse() {
+    if (this.res) {
+      const newResponse = new Response(this.res.body, {
+        status: this.status,
+        headers: this.res.headers
+      });
+      return newResponse;
+    }
+    return new Response(this.message, {
+      status: this.status
+    });
+  }
+};
+
+// node_modules/hono/dist/request/constants.js
+var GET_MATCH_RESULT = /* @__PURE__ */ Symbol();
+
+// node_modules/hono/dist/utils/body.js
+var parseBody = async (request, options = /* @__PURE__ */ Object.create(null)) => {
+  const { all = false, dot = false } = options;
+  const headers = request instanceof HonoRequest ? request.raw.headers : request.headers;
+  const contentType = headers.get("Content-Type");
+  if (contentType?.startsWith("multipart/form-data") || contentType?.startsWith("application/x-www-form-urlencoded")) {
+    return parseFormData(request, { all, dot });
+  }
+  return {};
+};
+async function parseFormData(request, options) {
+  const formData = await request.formData();
+  if (formData) {
+    return convertFormDataToBodyData(formData, options);
+  }
+  return {};
+}
+function convertFormDataToBodyData(formData, options) {
+  const form = /* @__PURE__ */ Object.create(null);
+  formData.forEach((value, key) => {
+    const shouldParseAllValues = options.all || key.endsWith("[]");
+    if (!shouldParseAllValues) {
+      form[key] = value;
+    } else {
+      handleParsingAllValues(form, key, value);
+    }
+  });
+  if (options.dot) {
+    Object.entries(form).forEach(([key, value]) => {
+      const shouldParseDotValues = key.includes(".");
+      if (shouldParseDotValues) {
+        handleParsingNestedValues(form, key, value);
+        delete form[key];
+      }
+    });
+  }
+  return form;
+}
+var handleParsingAllValues = (form, key, value) => {
+  if (form[key] !== undefined) {
+    if (Array.isArray(form[key])) {
+      form[key].push(value);
+    } else {
+      form[key] = [form[key], value];
+    }
+  } else {
+    if (!key.endsWith("[]")) {
+      form[key] = value;
+    } else {
+      form[key] = [value];
+    }
+  }
+};
+var handleParsingNestedValues = (form, key, value) => {
+  let nestedForm = form;
+  const keys = key.split(".");
+  keys.forEach((key2, index) => {
+    if (index === keys.length - 1) {
+      nestedForm[key2] = value;
+    } else {
+      if (!nestedForm[key2] || typeof nestedForm[key2] !== "object" || Array.isArray(nestedForm[key2]) || nestedForm[key2] instanceof File) {
+        nestedForm[key2] = /* @__PURE__ */ Object.create(null);
+      }
+      nestedForm = nestedForm[key2];
+    }
+  });
+};
+
+// node_modules/hono/dist/utils/url.js
+var splitPath = (path) => {
+  const paths = path.split("/");
+  if (paths[0] === "") {
+    paths.shift();
+  }
+  return paths;
+};
+var splitRoutingPath = (routePath) => {
+  const { groups, path } = extractGroupsFromPath(routePath);
+  const paths = splitPath(path);
+  return replaceGroupMarks(paths, groups);
+};
+var extractGroupsFromPath = (path) => {
+  const groups = [];
+  path = path.replace(/\{[^}]+\}/g, (match, index) => {
+    const mark = `@${index}`;
+    groups.push([mark, match]);
+    return mark;
+  });
+  return { groups, path };
+};
+var replaceGroupMarks = (paths, groups) => {
+  for (let i = groups.length - 1;i >= 0; i--) {
+    const [mark] = groups[i];
+    for (let j = paths.length - 1;j >= 0; j--) {
+      if (paths[j].includes(mark)) {
+        paths[j] = paths[j].replace(mark, groups[i][1]);
+        break;
+      }
+    }
+  }
+  return paths;
+};
+var patternCache = {};
+var getPattern = (label, next) => {
+  if (label === "*") {
+    return "*";
+  }
+  const match = label.match(/^\:([^\{\}]+)(?:\{(.+)\})?$/);
+  if (match) {
+    const cacheKey = `${label}#${next}`;
+    if (!patternCache[cacheKey]) {
+      if (match[2]) {
+        patternCache[cacheKey] = next && next[0] !== ":" && next[0] !== "*" ? [cacheKey, match[1], new RegExp(`^${match[2]}(?=/${next})`)] : [label, match[1], new RegExp(`^${match[2]}$`)];
+      } else {
+        patternCache[cacheKey] = [label, match[1], true];
+      }
+    }
+    return patternCache[cacheKey];
+  }
+  return null;
+};
+var tryDecode = (str, decoder) => {
+  try {
+    return decoder(str);
+  } catch {
+    return str.replace(/(?:%[0-9A-Fa-f]{2})+/g, (match) => {
+      try {
+        return decoder(match);
+      } catch {
+        return match;
+      }
+    });
+  }
+};
+var tryDecodeURI = (str) => tryDecode(str, decodeURI);
+var getPath = (request) => {
+  const url = request.url;
+  const start = url.indexOf("/", url.indexOf(":") + 4);
+  let i = start;
+  for (;i < url.length; i++) {
+    const charCode = url.charCodeAt(i);
+    if (charCode === 37) {
+      const queryIndex = url.indexOf("?", i);
+      const path = url.slice(start, queryIndex === -1 ? undefined : queryIndex);
+      return tryDecodeURI(path.includes("%25") ? path.replace(/%25/g, "%2525") : path);
+    } else if (charCode === 63) {
+      break;
+    }
+  }
+  return url.slice(start, i);
+};
+var getPathNoStrict = (request) => {
+  const result = getPath(request);
+  return result.length > 1 && result.at(-1) === "/" ? result.slice(0, -1) : result;
+};
+var mergePath = (base, sub, ...rest) => {
+  if (rest.length) {
+    sub = mergePath(sub, ...rest);
+  }
+  return `${base?.[0] === "/" ? "" : "/"}${base}${sub === "/" ? "" : `${base?.at(-1) === "/" ? "" : "/"}${sub?.[0] === "/" ? sub.slice(1) : sub}`}`;
+};
+var checkOptionalParameter = (path) => {
+  if (path.charCodeAt(path.length - 1) !== 63 || !path.includes(":")) {
+    return null;
+  }
+  const segments = path.split("/");
+  const results = [];
+  let basePath = "";
+  segments.forEach((segment) => {
+    if (segment !== "" && !/\:/.test(segment)) {
+      basePath += "/" + segment;
+    } else if (/\:/.test(segment)) {
+      if (/\?/.test(segment)) {
+        if (results.length === 0 && basePath === "") {
+          results.push("/");
+        } else {
+          results.push(basePath);
+        }
+        const optionalSegment = segment.replace("?", "");
+        basePath += "/" + optionalSegment;
+        results.push(basePath);
+      } else {
+        basePath += "/" + segment;
+      }
+    }
+  });
+  return results.filter((v, i, a) => a.indexOf(v) === i);
+};
+var _decodeURI = (value) => {
+  if (!/[%+]/.test(value)) {
+    return value;
+  }
+  if (value.indexOf("+") !== -1) {
+    value = value.replace(/\+/g, " ");
+  }
+  return value.indexOf("%") !== -1 ? tryDecode(value, decodeURIComponent_) : value;
+};
+var _getQueryParam = (url, key, multiple) => {
+  let encoded;
+  if (!multiple && key && !/[%+]/.test(key)) {
+    let keyIndex2 = url.indexOf("?", 8);
+    if (keyIndex2 === -1) {
+      return;
+    }
+    if (!url.startsWith(key, keyIndex2 + 1)) {
+      keyIndex2 = url.indexOf(`&${key}`, keyIndex2 + 1);
+    }
+    while (keyIndex2 !== -1) {
+      const trailingKeyCode = url.charCodeAt(keyIndex2 + key.length + 1);
+      if (trailingKeyCode === 61) {
+        const valueIndex = keyIndex2 + key.length + 2;
+        const endIndex = url.indexOf("&", valueIndex);
+        return _decodeURI(url.slice(valueIndex, endIndex === -1 ? undefined : endIndex));
+      } else if (trailingKeyCode == 38 || isNaN(trailingKeyCode)) {
+        return "";
+      }
+      keyIndex2 = url.indexOf(`&${key}`, keyIndex2 + 1);
+    }
+    encoded = /[%+]/.test(url);
+    if (!encoded) {
+      return;
+    }
+  }
+  const results = {};
+  encoded ??= /[%+]/.test(url);
+  let keyIndex = url.indexOf("?", 8);
+  while (keyIndex !== -1) {
+    const nextKeyIndex = url.indexOf("&", keyIndex + 1);
+    let valueIndex = url.indexOf("=", keyIndex);
+    if (valueIndex > nextKeyIndex && nextKeyIndex !== -1) {
+      valueIndex = -1;
+    }
+    let name = url.slice(keyIndex + 1, valueIndex === -1 ? nextKeyIndex === -1 ? undefined : nextKeyIndex : valueIndex);
+    if (encoded) {
+      name = _decodeURI(name);
+    }
+    keyIndex = nextKeyIndex;
+    if (name === "") {
+      continue;
+    }
+    let value;
+    if (valueIndex === -1) {
+      value = "";
+    } else {
+      value = url.slice(valueIndex + 1, nextKeyIndex === -1 ? undefined : nextKeyIndex);
+      if (encoded) {
+        value = _decodeURI(value);
+      }
+    }
+    if (multiple) {
+      if (!(results[name] && Array.isArray(results[name]))) {
+        results[name] = [];
+      }
+      results[name].push(value);
+    } else {
+      results[name] ??= value;
+    }
+  }
+  return key ? results[key] : results;
+};
+var getQueryParam = _getQueryParam;
+var getQueryParams = (url, key) => {
+  return _getQueryParam(url, key, true);
+};
+var decodeURIComponent_ = decodeURIComponent;
+
+// node_modules/hono/dist/request.js
+var tryDecodeURIComponent = (str) => tryDecode(str, decodeURIComponent_);
+var HonoRequest = class {
+  raw;
+  #validatedData;
+  #matchResult;
+  routeIndex = 0;
+  path;
+  bodyCache = {};
+  constructor(request, path = "/", matchResult = [[]]) {
+    this.raw = request;
+    this.path = path;
+    this.#matchResult = matchResult;
+    this.#validatedData = {};
+  }
+  param(key) {
+    return key ? this.#getDecodedParam(key) : this.#getAllDecodedParams();
+  }
+  #getDecodedParam(key) {
+    const paramKey = this.#matchResult[0][this.routeIndex][1][key];
+    const param = this.#getParamValue(paramKey);
+    return param && /\%/.test(param) ? tryDecodeURIComponent(param) : param;
+  }
+  #getAllDecodedParams() {
+    const decoded = {};
+    const keys = Object.keys(this.#matchResult[0][this.routeIndex][1]);
+    for (const key of keys) {
+      const value = this.#getParamValue(this.#matchResult[0][this.routeIndex][1][key]);
+      if (value !== undefined) {
+        decoded[key] = /\%/.test(value) ? tryDecodeURIComponent(value) : value;
+      }
+    }
+    return decoded;
+  }
+  #getParamValue(paramKey) {
+    return this.#matchResult[1] ? this.#matchResult[1][paramKey] : paramKey;
+  }
+  query(key) {
+    return getQueryParam(this.url, key);
+  }
+  queries(key) {
+    return getQueryParams(this.url, key);
+  }
+  header(name) {
+    if (name) {
+      return this.raw.headers.get(name) ?? undefined;
+    }
+    const headerData = {};
+    this.raw.headers.forEach((value, key) => {
+      headerData[key] = value;
+    });
+    return headerData;
+  }
+  async parseBody(options) {
+    return this.bodyCache.parsedBody ??= await parseBody(this, options);
+  }
+  #cachedBody = (key) => {
+    const { bodyCache, raw } = this;
+    const cachedBody = bodyCache[key];
+    if (cachedBody) {
+      return cachedBody;
+    }
+    const anyCachedKey = Object.keys(bodyCache)[0];
+    if (anyCachedKey) {
+      return bodyCache[anyCachedKey].then((body) => {
+        if (anyCachedKey === "json") {
+          body = JSON.stringify(body);
+        }
+        return new Response(body)[key]();
+      });
+    }
+    return bodyCache[key] = raw[key]();
+  };
+  json() {
+    return this.#cachedBody("text").then((text) => JSON.parse(text));
+  }
+  text() {
+    return this.#cachedBody("text");
+  }
+  arrayBuffer() {
+    return this.#cachedBody("arrayBuffer");
+  }
+  blob() {
+    return this.#cachedBody("blob");
+  }
+  formData() {
+    return this.#cachedBody("formData");
+  }
+  addValidatedData(target, data) {
+    this.#validatedData[target] = data;
+  }
+  valid(target) {
+    return this.#validatedData[target];
+  }
+  get url() {
+    return this.raw.url;
+  }
+  get method() {
+    return this.raw.method;
+  }
+  get [GET_MATCH_RESULT]() {
+    return this.#matchResult;
+  }
+  get matchedRoutes() {
+    return this.#matchResult[0].map(([[, route]]) => route);
+  }
+  get routePath() {
+    return this.#matchResult[0].map(([[, route]]) => route)[this.routeIndex].path;
+  }
+};
+
+// node_modules/hono/dist/utils/html.js
+var HtmlEscapedCallbackPhase = {
+  Stringify: 1,
+  BeforeStream: 2,
+  Stream: 3
+};
+var raw = (value, callbacks) => {
+  const escapedString = new String(value);
+  escapedString.isEscaped = true;
+  escapedString.callbacks = callbacks;
+  return escapedString;
+};
+var escapeRe = /[&<>'"]/;
+var stringBufferToString = async (buffer, callbacks) => {
+  let str = "";
+  callbacks ||= [];
+  const resolvedBuffer = await Promise.all(buffer);
+  for (let i = resolvedBuffer.length - 1;; i--) {
+    str += resolvedBuffer[i];
+    i--;
+    if (i < 0) {
+      break;
+    }
+    let r = resolvedBuffer[i];
+    if (typeof r === "object") {
+      callbacks.push(...r.callbacks || []);
+    }
+    const isEscaped = r.isEscaped;
+    r = await (typeof r === "object" ? r.toString() : r);
+    if (typeof r === "object") {
+      callbacks.push(...r.callbacks || []);
+    }
+    if (r.isEscaped ?? isEscaped) {
+      str += r;
+    } else {
+      const buf = [str];
+      escapeToBuffer(r, buf);
+      str = buf[0];
+    }
+  }
+  return raw(str, callbacks);
+};
+var escapeToBuffer = (str, buffer) => {
+  const match = str.search(escapeRe);
+  if (match === -1) {
+    buffer[0] += str;
+    return;
+  }
+  let escape;
+  let index;
+  let lastIndex = 0;
+  for (index = match;index < str.length; index++) {
+    switch (str.charCodeAt(index)) {
+      case 34:
+        escape = "&quot;";
+        break;
+      case 39:
+        escape = "&#39;";
+        break;
+      case 38:
+        escape = "&amp;";
+        break;
+      case 60:
+        escape = "&lt;";
+        break;
+      case 62:
+        escape = "&gt;";
+        break;
+      default:
+        continue;
+    }
+    buffer[0] += str.substring(lastIndex, index) + escape;
+    lastIndex = index + 1;
+  }
+  buffer[0] += str.substring(lastIndex, index);
+};
+var resolveCallbackSync = (str) => {
+  const callbacks = str.callbacks;
+  if (!callbacks?.length) {
+    return str;
+  }
+  const buffer = [str];
+  const context = {};
+  callbacks.forEach((c) => c({ phase: HtmlEscapedCallbackPhase.Stringify, buffer, context }));
+  return buffer[0];
+};
+var resolveCallback = async (str, phase, preserveCallbacks, context, buffer) => {
+  if (typeof str === "object" && !(str instanceof String)) {
+    if (!(str instanceof Promise)) {
+      str = str.toString();
+    }
+    if (str instanceof Promise) {
+      str = await str;
+    }
+  }
+  const callbacks = str.callbacks;
+  if (!callbacks?.length) {
+    return Promise.resolve(str);
+  }
+  if (buffer) {
+    buffer[0] += str;
+  } else {
+    buffer = [str];
+  }
+  const resStr = Promise.all(callbacks.map((c) => c({ phase, buffer, context }))).then((res) => Promise.all(res.filter(Boolean).map((str2) => resolveCallback(str2, phase, false, context, buffer))).then(() => buffer[0]));
+  if (preserveCallbacks) {
+    return raw(await resStr, callbacks);
+  } else {
+    return resStr;
+  }
+};
+
+// node_modules/hono/dist/context.js
+var TEXT_PLAIN = "text/plain; charset=UTF-8";
+var setDefaultContentType = (contentType, headers) => {
+  return {
+    "Content-Type": contentType,
+    ...headers
+  };
+};
+var Context = class {
+  #rawRequest;
+  #req;
+  env = {};
+  #var;
+  finalized = false;
+  error;
+  #status;
+  #executionCtx;
+  #res;
+  #layout;
+  #renderer;
+  #notFoundHandler;
+  #preparedHeaders;
+  #matchResult;
+  #path;
+  constructor(req, options) {
+    this.#rawRequest = req;
+    if (options) {
+      this.#executionCtx = options.executionCtx;
+      this.env = options.env;
+      this.#notFoundHandler = options.notFoundHandler;
+      this.#path = options.path;
+      this.#matchResult = options.matchResult;
+    }
+  }
+  get req() {
+    this.#req ??= new HonoRequest(this.#rawRequest, this.#path, this.#matchResult);
+    return this.#req;
+  }
+  get event() {
+    if (this.#executionCtx && "respondWith" in this.#executionCtx) {
+      return this.#executionCtx;
+    } else {
+      throw Error("This context has no FetchEvent");
+    }
+  }
+  get executionCtx() {
+    if (this.#executionCtx) {
+      return this.#executionCtx;
+    } else {
+      throw Error("This context has no ExecutionContext");
+    }
+  }
+  get res() {
+    return this.#res ||= new Response(null, {
+      headers: this.#preparedHeaders ??= new Headers
+    });
+  }
+  set res(_res) {
+    if (this.#res && _res) {
+      _res = new Response(_res.body, _res);
+      for (const [k, v] of this.#res.headers.entries()) {
+        if (k === "content-type") {
+          continue;
+        }
+        if (k === "set-cookie") {
+          const cookies = this.#res.headers.getSetCookie();
+          _res.headers.delete("set-cookie");
+          for (const cookie of cookies) {
+            _res.headers.append("set-cookie", cookie);
+          }
+        } else {
+          _res.headers.set(k, v);
+        }
+      }
+    }
+    this.#res = _res;
+    this.finalized = true;
+  }
+  render = (...args) => {
+    this.#renderer ??= (content) => this.html(content);
+    return this.#renderer(...args);
+  };
+  setLayout = (layout) => this.#layout = layout;
+  getLayout = () => this.#layout;
+  setRenderer = (renderer) => {
+    this.#renderer = renderer;
+  };
+  header = (name, value, options) => {
+    if (this.finalized) {
+      this.#res = new Response(this.#res.body, this.#res);
+    }
+    const headers = this.#res ? this.#res.headers : this.#preparedHeaders ??= new Headers;
+    if (value === undefined) {
+      headers.delete(name);
+    } else if (options?.append) {
+      headers.append(name, value);
+    } else {
+      headers.set(name, value);
+    }
+  };
+  status = (status) => {
+    this.#status = status;
+  };
+  set = (key, value) => {
+    this.#var ??= /* @__PURE__ */ new Map;
+    this.#var.set(key, value);
+  };
+  get = (key) => {
+    return this.#var ? this.#var.get(key) : undefined;
+  };
+  get var() {
+    if (!this.#var) {
+      return {};
+    }
+    return Object.fromEntries(this.#var);
+  }
+  #newResponse(data, arg, headers) {
+    const responseHeaders = this.#res ? new Headers(this.#res.headers) : this.#preparedHeaders ?? new Headers;
+    if (typeof arg === "object" && "headers" in arg) {
+      const argHeaders = arg.headers instanceof Headers ? arg.headers : new Headers(arg.headers);
+      for (const [key, value] of argHeaders) {
+        if (key.toLowerCase() === "set-cookie") {
+          responseHeaders.append(key, value);
+        } else {
+          responseHeaders.set(key, value);
+        }
+      }
+    }
+    if (headers) {
+      for (const [k, v] of Object.entries(headers)) {
+        if (typeof v === "string") {
+          responseHeaders.set(k, v);
+        } else {
+          responseHeaders.delete(k);
+          for (const v2 of v) {
+            responseHeaders.append(k, v2);
+          }
+        }
+      }
+    }
+    const status = typeof arg === "number" ? arg : arg?.status ?? this.#status;
+    return new Response(data, { status, headers: responseHeaders });
+  }
+  newResponse = (...args) => this.#newResponse(...args);
+  body = (data, arg, headers) => this.#newResponse(data, arg, headers);
+  text = (text, arg, headers) => {
+    return !this.#preparedHeaders && !this.#status && !arg && !headers && !this.finalized ? new Response(text) : this.#newResponse(text, arg, setDefaultContentType(TEXT_PLAIN, headers));
+  };
+  json = (object, arg, headers) => {
+    return this.#newResponse(JSON.stringify(object), arg, setDefaultContentType("application/json", headers));
+  };
+  html = (html, arg, headers) => {
+    const res = (html2) => this.#newResponse(html2, arg, setDefaultContentType("text/html; charset=UTF-8", headers));
+    return typeof html === "object" ? resolveCallback(html, HtmlEscapedCallbackPhase.Stringify, false, {}).then(res) : res(html);
+  };
+  redirect = (location, status) => {
+    const locationString = String(location);
+    this.header("Location", !/[^\x00-\xFF]/.test(locationString) ? locationString : encodeURI(locationString));
+    return this.newResponse(null, status ?? 302);
+  };
+  notFound = () => {
+    this.#notFoundHandler ??= () => new Response;
+    return this.#notFoundHandler(this);
+  };
+};
+
+// node_modules/hono/dist/router.js
+var METHOD_NAME_ALL = "ALL";
+var METHOD_NAME_ALL_LOWERCASE = "all";
+var METHODS = ["get", "post", "put", "delete", "options", "patch"];
+var MESSAGE_MATCHER_IS_ALREADY_BUILT = "Can not add a route since the matcher is already built.";
+var UnsupportedPathError = class extends Error {
+};
+
+// node_modules/hono/dist/utils/constants.js
+var COMPOSED_HANDLER = "__COMPOSED_HANDLER";
+
+// node_modules/hono/dist/hono-base.js
+var notFoundHandler = (c) => {
+  return c.text("404 Not Found", 404);
+};
+var errorHandler = (err, c) => {
+  if ("getResponse" in err) {
+    const res = err.getResponse();
+    return c.newResponse(res.body, res);
+  }
+  console.error(err);
+  return c.text("Internal Server Error", 500);
+};
+var Hono = class _Hono {
+  get;
+  post;
+  put;
+  delete;
+  options;
+  patch;
+  all;
+  on;
+  use;
+  router;
+  getPath;
+  _basePath = "/";
+  #path = "/";
+  routes = [];
+  constructor(options = {}) {
+    const allMethods = [...METHODS, METHOD_NAME_ALL_LOWERCASE];
+    allMethods.forEach((method) => {
+      this[method] = (args1, ...args) => {
+        if (typeof args1 === "string") {
+          this.#path = args1;
+        } else {
+          this.#addRoute(method, this.#path, args1);
+        }
+        args.forEach((handler) => {
+          this.#addRoute(method, this.#path, handler);
+        });
+        return this;
+      };
+    });
+    this.on = (method, path, ...handlers) => {
+      for (const p of [path].flat()) {
+        this.#path = p;
+        for (const m of [method].flat()) {
+          handlers.map((handler) => {
+            this.#addRoute(m.toUpperCase(), this.#path, handler);
+          });
+        }
+      }
+      return this;
+    };
+    this.use = (arg1, ...handlers) => {
+      if (typeof arg1 === "string") {
+        this.#path = arg1;
+      } else {
+        this.#path = "*";
+        handlers.unshift(arg1);
+      }
+      handlers.forEach((handler) => {
+        this.#addRoute(METHOD_NAME_ALL, this.#path, handler);
+      });
+      return this;
+    };
+    const { strict, ...optionsWithoutStrict } = options;
+    Object.assign(this, optionsWithoutStrict);
+    this.getPath = strict ?? true ? options.getPath ?? getPath : getPathNoStrict;
+  }
+  #clone() {
+    const clone = new _Hono({
+      router: this.router,
+      getPath: this.getPath
+    });
+    clone.errorHandler = this.errorHandler;
+    clone.#notFoundHandler = this.#notFoundHandler;
+    clone.routes = this.routes;
+    return clone;
+  }
+  #notFoundHandler = notFoundHandler;
+  errorHandler = errorHandler;
+  route(path, app) {
+    const subApp = this.basePath(path);
+    app.routes.map((r) => {
+      let handler;
+      if (app.errorHandler === errorHandler) {
+        handler = r.handler;
+      } else {
+        handler = async (c, next) => (await compose([], app.errorHandler)(c, () => r.handler(c, next))).res;
+        handler[COMPOSED_HANDLER] = r.handler;
+      }
+      subApp.#addRoute(r.method, r.path, handler);
+    });
+    return this;
+  }
+  basePath(path) {
+    const subApp = this.#clone();
+    subApp._basePath = mergePath(this._basePath, path);
+    return subApp;
+  }
+  onError = (handler) => {
+    this.errorHandler = handler;
+    return this;
+  };
+  notFound = (handler) => {
+    this.#notFoundHandler = handler;
+    return this;
+  };
+  mount(path, applicationHandler, options) {
+    let replaceRequest;
+    let optionHandler;
+    if (options) {
+      if (typeof options === "function") {
+        optionHandler = options;
+      } else {
+        optionHandler = options.optionHandler;
+        if (options.replaceRequest === false) {
+          replaceRequest = (request) => request;
+        } else {
+          replaceRequest = options.replaceRequest;
+        }
+      }
+    }
+    const getOptions = optionHandler ? (c) => {
+      const options2 = optionHandler(c);
+      return Array.isArray(options2) ? options2 : [options2];
+    } : (c) => {
+      let executionContext = undefined;
+      try {
+        executionContext = c.executionCtx;
+      } catch {}
+      return [c.env, executionContext];
+    };
+    replaceRequest ||= (() => {
+      const mergedPath = mergePath(this._basePath, path);
+      const pathPrefixLength = mergedPath === "/" ? 0 : mergedPath.length;
+      return (request) => {
+        const url = new URL(request.url);
+        url.pathname = url.pathname.slice(pathPrefixLength) || "/";
+        return new Request(url, request);
+      };
+    })();
+    const handler = async (c, next) => {
+      const res = await applicationHandler(replaceRequest(c.req.raw), ...getOptions(c));
+      if (res) {
+        return res;
+      }
+      await next();
+    };
+    this.#addRoute(METHOD_NAME_ALL, mergePath(path, "*"), handler);
+    return this;
+  }
+  #addRoute(method, path, handler) {
+    method = method.toUpperCase();
+    path = mergePath(this._basePath, path);
+    const r = { basePath: this._basePath, path, method, handler };
+    this.router.add(method, path, [handler, r]);
+    this.routes.push(r);
+  }
+  #handleError(err, c) {
+    if (err instanceof Error) {
+      return this.errorHandler(err, c);
+    }
+    throw err;
+  }
+  #dispatch(request, executionCtx, env, method) {
+    if (method === "HEAD") {
+      return (async () => new Response(null, await this.#dispatch(request, executionCtx, env, "GET")))();
+    }
+    const path = this.getPath(request, { env });
+    const matchResult = this.router.match(method, path);
+    const c = new Context(request, {
+      path,
+      matchResult,
+      env,
+      executionCtx,
+      notFoundHandler: this.#notFoundHandler
+    });
+    if (matchResult[0].length === 1) {
+      let res;
+      try {
+        res = matchResult[0][0][0][0](c, async () => {
+          c.res = await this.#notFoundHandler(c);
+        });
+      } catch (err) {
+        return this.#handleError(err, c);
+      }
+      return res instanceof Promise ? res.then((resolved) => resolved || (c.finalized ? c.res : this.#notFoundHandler(c))).catch((err) => this.#handleError(err, c)) : res ?? this.#notFoundHandler(c);
+    }
+    const composed = compose(matchResult[0], this.errorHandler, this.#notFoundHandler);
+    return (async () => {
+      try {
+        const context = await composed(c);
+        if (!context.finalized) {
+          throw new Error("Context is not finalized. Did you forget to return a Response object or `await next()`?");
+        }
+        return context.res;
+      } catch (err) {
+        return this.#handleError(err, c);
+      }
+    })();
+  }
+  fetch = (request, ...rest) => {
+    return this.#dispatch(request, rest[1], rest[0], request.method);
+  };
+  request = (input, requestInit, Env, executionCtx) => {
+    if (input instanceof Request) {
+      return this.fetch(requestInit ? new Request(input, requestInit) : input, Env, executionCtx);
+    }
+    input = input.toString();
+    return this.fetch(new Request(/^https?:\/\//.test(input) ? input : `http://localhost${mergePath("/", input)}`, requestInit), Env, executionCtx);
+  };
+  fire = () => {
+    addEventListener("fetch", (event) => {
+      event.respondWith(this.#dispatch(event.request, event, undefined, event.request.method));
+    });
+  };
+};
+
+// node_modules/hono/dist/router/reg-exp-router/matcher.js
+var emptyParam = [];
+function match(method, path) {
+  const matchers = this.buildAllMatchers();
+  const match2 = (method2, path2) => {
+    const matcher = matchers[method2] || matchers[METHOD_NAME_ALL];
+    const staticMatch = matcher[2][path2];
+    if (staticMatch) {
+      return staticMatch;
+    }
+    const match3 = path2.match(matcher[0]);
+    if (!match3) {
+      return [[], emptyParam];
+    }
+    const index = match3.indexOf("", 1);
+    return [matcher[1][index], match3];
+  };
+  this.match = match2;
+  return match2(method, path);
+}
+
+// node_modules/hono/dist/router/reg-exp-router/node.js
+var LABEL_REG_EXP_STR = "[^/]+";
+var ONLY_WILDCARD_REG_EXP_STR = ".*";
+var TAIL_WILDCARD_REG_EXP_STR = "(?:|/.*)";
+var PATH_ERROR = /* @__PURE__ */ Symbol();
+var regExpMetaChars = new Set(".\\+*[^]$()");
+function compareKey(a, b) {
+  if (a.length === 1) {
+    return b.length === 1 ? a < b ? -1 : 1 : -1;
+  }
+  if (b.length === 1) {
+    return 1;
+  }
+  if (a === ONLY_WILDCARD_REG_EXP_STR || a === TAIL_WILDCARD_REG_EXP_STR) {
+    return 1;
+  } else if (b === ONLY_WILDCARD_REG_EXP_STR || b === TAIL_WILDCARD_REG_EXP_STR) {
+    return -1;
+  }
+  if (a === LABEL_REG_EXP_STR) {
+    return 1;
+  } else if (b === LABEL_REG_EXP_STR) {
+    return -1;
+  }
+  return a.length === b.length ? a < b ? -1 : 1 : b.length - a.length;
+}
+var Node = class _Node {
+  #index;
+  #varIndex;
+  #children = /* @__PURE__ */ Object.create(null);
+  insert(tokens, index, paramMap, context, pathErrorCheckOnly) {
+    if (tokens.length === 0) {
+      if (this.#index !== undefined) {
+        throw PATH_ERROR;
+      }
+      if (pathErrorCheckOnly) {
+        return;
+      }
+      this.#index = index;
+      return;
+    }
+    const [token, ...restTokens] = tokens;
+    const pattern = token === "*" ? restTokens.length === 0 ? ["", "", ONLY_WILDCARD_REG_EXP_STR] : ["", "", LABEL_REG_EXP_STR] : token === "/*" ? ["", "", TAIL_WILDCARD_REG_EXP_STR] : token.match(/^\:([^\{\}]+)(?:\{(.+)\})?$/);
+    let node;
+    if (pattern) {
+      const name = pattern[1];
+      let regexpStr = pattern[2] || LABEL_REG_EXP_STR;
+      if (name && pattern[2]) {
+        if (regexpStr === ".*") {
+          throw PATH_ERROR;
+        }
+        regexpStr = regexpStr.replace(/^\((?!\?:)(?=[^)]+\)$)/, "(?:");
+        if (/\((?!\?:)/.test(regexpStr)) {
+          throw PATH_ERROR;
+        }
+      }
+      node = this.#children[regexpStr];
+      if (!node) {
+        if (Object.keys(this.#children).some((k) => k !== ONLY_WILDCARD_REG_EXP_STR && k !== TAIL_WILDCARD_REG_EXP_STR)) {
+          throw PATH_ERROR;
+        }
+        if (pathErrorCheckOnly) {
+          return;
+        }
+        node = this.#children[regexpStr] = new _Node;
+        if (name !== "") {
+          node.#varIndex = context.varIndex++;
+        }
+      }
+      if (!pathErrorCheckOnly && name !== "") {
+        paramMap.push([name, node.#varIndex]);
+      }
+    } else {
+      node = this.#children[token];
+      if (!node) {
+        if (Object.keys(this.#children).some((k) => k.length > 1 && k !== ONLY_WILDCARD_REG_EXP_STR && k !== TAIL_WILDCARD_REG_EXP_STR)) {
+          throw PATH_ERROR;
+        }
+        if (pathErrorCheckOnly) {
+          return;
+        }
+        node = this.#children[token] = new _Node;
+      }
+    }
+    node.insert(restTokens, index, paramMap, context, pathErrorCheckOnly);
+  }
+  buildRegExpStr() {
+    const childKeys = Object.keys(this.#children).sort(compareKey);
+    const strList = childKeys.map((k) => {
+      const c = this.#children[k];
+      return (typeof c.#varIndex === "number" ? `(${k})@${c.#varIndex}` : regExpMetaChars.has(k) ? `\\${k}` : k) + c.buildRegExpStr();
+    });
+    if (typeof this.#index === "number") {
+      strList.unshift(`#${this.#index}`);
+    }
+    if (strList.length === 0) {
+      return "";
+    }
+    if (strList.length === 1) {
+      return strList[0];
+    }
+    return "(?:" + strList.join("|") + ")";
+  }
+};
+
+// node_modules/hono/dist/router/reg-exp-router/trie.js
+var Trie = class {
+  #context = { varIndex: 0 };
+  #root = new Node;
+  insert(path, index, pathErrorCheckOnly) {
+    const paramAssoc = [];
+    const groups = [];
+    for (let i = 0;; ) {
+      let replaced = false;
+      path = path.replace(/\{[^}]+\}/g, (m) => {
+        const mark = `@\\${i}`;
+        groups[i] = [mark, m];
+        i++;
+        replaced = true;
+        return mark;
+      });
+      if (!replaced) {
+        break;
+      }
+    }
+    const tokens = path.match(/(?::[^\/]+)|(?:\/\*$)|./g) || [];
+    for (let i = groups.length - 1;i >= 0; i--) {
+      const [mark] = groups[i];
+      for (let j = tokens.length - 1;j >= 0; j--) {
+        if (tokens[j].indexOf(mark) !== -1) {
+          tokens[j] = tokens[j].replace(mark, groups[i][1]);
+          break;
+        }
+      }
+    }
+    this.#root.insert(tokens, index, paramAssoc, this.#context, pathErrorCheckOnly);
+    return paramAssoc;
+  }
+  buildRegExp() {
+    let regexp = this.#root.buildRegExpStr();
+    if (regexp === "") {
+      return [/^$/, [], []];
+    }
+    let captureIndex = 0;
+    const indexReplacementMap = [];
+    const paramReplacementMap = [];
+    regexp = regexp.replace(/#(\d+)|@(\d+)|\.\*\$/g, (_, handlerIndex, paramIndex) => {
+      if (handlerIndex !== undefined) {
+        indexReplacementMap[++captureIndex] = Number(handlerIndex);
+        return "$()";
+      }
+      if (paramIndex !== undefined) {
+        paramReplacementMap[Number(paramIndex)] = ++captureIndex;
+        return "";
+      }
+      return "";
+    });
+    return [new RegExp(`^${regexp}`), indexReplacementMap, paramReplacementMap];
+  }
+};
+
+// node_modules/hono/dist/router/reg-exp-router/router.js
+var nullMatcher = [/^$/, [], /* @__PURE__ */ Object.create(null)];
+var wildcardRegExpCache = /* @__PURE__ */ Object.create(null);
+function buildWildcardRegExp(path) {
+  return wildcardRegExpCache[path] ??= new RegExp(path === "*" ? "" : `^${path.replace(/\/\*$|([.\\+*[^\]$()])/g, (_, metaChar) => metaChar ? `\\${metaChar}` : "(?:|/.*)")}$`);
+}
+function clearWildcardRegExpCache() {
+  wildcardRegExpCache = /* @__PURE__ */ Object.create(null);
+}
+function buildMatcherFromPreprocessedRoutes(routes) {
+  const trie = new Trie;
+  const handlerData = [];
+  if (routes.length === 0) {
+    return nullMatcher;
+  }
+  const routesWithStaticPathFlag = routes.map((route) => [!/\*|\/:/.test(route[0]), ...route]).sort(([isStaticA, pathA], [isStaticB, pathB]) => isStaticA ? 1 : isStaticB ? -1 : pathA.length - pathB.length);
+  const staticMap = /* @__PURE__ */ Object.create(null);
+  for (let i = 0, j = -1, len = routesWithStaticPathFlag.length;i < len; i++) {
+    const [pathErrorCheckOnly, path, handlers] = routesWithStaticPathFlag[i];
+    if (pathErrorCheckOnly) {
+      staticMap[path] = [handlers.map(([h]) => [h, /* @__PURE__ */ Object.create(null)]), emptyParam];
+    } else {
+      j++;
+    }
+    let paramAssoc;
+    try {
+      paramAssoc = trie.insert(path, j, pathErrorCheckOnly);
+    } catch (e) {
+      throw e === PATH_ERROR ? new UnsupportedPathError(path) : e;
+    }
+    if (pathErrorCheckOnly) {
+      continue;
+    }
+    handlerData[j] = handlers.map(([h, paramCount]) => {
+      const paramIndexMap = /* @__PURE__ */ Object.create(null);
+      paramCount -= 1;
+      for (;paramCount >= 0; paramCount--) {
+        const [key, value] = paramAssoc[paramCount];
+        paramIndexMap[key] = value;
+      }
+      return [h, paramIndexMap];
+    });
+  }
+  const [regexp, indexReplacementMap, paramReplacementMap] = trie.buildRegExp();
+  for (let i = 0, len = handlerData.length;i < len; i++) {
+    for (let j = 0, len2 = handlerData[i].length;j < len2; j++) {
+      const map = handlerData[i][j]?.[1];
+      if (!map) {
+        continue;
+      }
+      const keys = Object.keys(map);
+      for (let k = 0, len3 = keys.length;k < len3; k++) {
+        map[keys[k]] = paramReplacementMap[map[keys[k]]];
+      }
+    }
+  }
+  const handlerMap = [];
+  for (const i in indexReplacementMap) {
+    handlerMap[i] = handlerData[indexReplacementMap[i]];
+  }
+  return [regexp, handlerMap, staticMap];
+}
+function findMiddleware(middleware, path) {
+  if (!middleware) {
+    return;
+  }
+  for (const k of Object.keys(middleware).sort((a, b) => b.length - a.length)) {
+    if (buildWildcardRegExp(k).test(path)) {
+      return [...middleware[k]];
+    }
+  }
+  return;
+}
+var RegExpRouter = class {
+  name = "RegExpRouter";
+  #middleware;
+  #routes;
+  constructor() {
+    this.#middleware = { [METHOD_NAME_ALL]: /* @__PURE__ */ Object.create(null) };
+    this.#routes = { [METHOD_NAME_ALL]: /* @__PURE__ */ Object.create(null) };
+  }
+  add(method, path, handler) {
+    const middleware = this.#middleware;
+    const routes = this.#routes;
+    if (!middleware || !routes) {
+      throw new Error(MESSAGE_MATCHER_IS_ALREADY_BUILT);
+    }
+    if (!middleware[method]) {
+      [middleware, routes].forEach((handlerMap) => {
+        handlerMap[method] = /* @__PURE__ */ Object.create(null);
+        Object.keys(handlerMap[METHOD_NAME_ALL]).forEach((p) => {
+          handlerMap[method][p] = [...handlerMap[METHOD_NAME_ALL][p]];
+        });
+      });
+    }
+    if (path === "/*") {
+      path = "*";
+    }
+    const paramCount = (path.match(/\/:/g) || []).length;
+    if (/\*$/.test(path)) {
+      const re = buildWildcardRegExp(path);
+      if (method === METHOD_NAME_ALL) {
+        Object.keys(middleware).forEach((m) => {
+          middleware[m][path] ||= findMiddleware(middleware[m], path) || findMiddleware(middleware[METHOD_NAME_ALL], path) || [];
+        });
+      } else {
+        middleware[method][path] ||= findMiddleware(middleware[method], path) || findMiddleware(middleware[METHOD_NAME_ALL], path) || [];
+      }
+      Object.keys(middleware).forEach((m) => {
+        if (method === METHOD_NAME_ALL || method === m) {
+          Object.keys(middleware[m]).forEach((p) => {
+            re.test(p) && middleware[m][p].push([handler, paramCount]);
+          });
+        }
+      });
+      Object.keys(routes).forEach((m) => {
+        if (method === METHOD_NAME_ALL || method === m) {
+          Object.keys(routes[m]).forEach((p) => re.test(p) && routes[m][p].push([handler, paramCount]));
+        }
+      });
+      return;
+    }
+    const paths = checkOptionalParameter(path) || [path];
+    for (let i = 0, len = paths.length;i < len; i++) {
+      const path2 = paths[i];
+      Object.keys(routes).forEach((m) => {
+        if (method === METHOD_NAME_ALL || method === m) {
+          routes[m][path2] ||= [
+            ...findMiddleware(middleware[m], path2) || findMiddleware(middleware[METHOD_NAME_ALL], path2) || []
+          ];
+          routes[m][path2].push([handler, paramCount - len + i + 1]);
+        }
+      });
+    }
+  }
+  match = match;
+  buildAllMatchers() {
+    const matchers = /* @__PURE__ */ Object.create(null);
+    Object.keys(this.#routes).concat(Object.keys(this.#middleware)).forEach((method) => {
+      matchers[method] ||= this.#buildMatcher(method);
+    });
+    this.#middleware = this.#routes = undefined;
+    clearWildcardRegExpCache();
+    return matchers;
+  }
+  #buildMatcher(method) {
+    const routes = [];
+    let hasOwnRoute = method === METHOD_NAME_ALL;
+    [this.#middleware, this.#routes].forEach((r) => {
+      const ownRoute = r[method] ? Object.keys(r[method]).map((path) => [path, r[method][path]]) : [];
+      if (ownRoute.length !== 0) {
+        hasOwnRoute ||= true;
+        routes.push(...ownRoute);
+      } else if (method !== METHOD_NAME_ALL) {
+        routes.push(...Object.keys(r[METHOD_NAME_ALL]).map((path) => [path, r[METHOD_NAME_ALL][path]]));
+      }
+    });
+    if (!hasOwnRoute) {
+      return null;
+    } else {
+      return buildMatcherFromPreprocessedRoutes(routes);
+    }
+  }
+};
+
+// node_modules/hono/dist/router/reg-exp-router/prepared-router.js
+var PreparedRegExpRouter = class {
+  name = "PreparedRegExpRouter";
+  #matchers;
+  #relocateMap;
+  constructor(matchers, relocateMap) {
+    this.#matchers = matchers;
+    this.#relocateMap = relocateMap;
+  }
+  #addWildcard(method, handlerData) {
+    const matcher = this.#matchers[method];
+    matcher[1].forEach((list) => list && list.push(handlerData));
+    Object.values(matcher[2]).forEach((list) => list[0].push(handlerData));
+  }
+  #addPath(method, path, handler, indexes, map) {
+    const matcher = this.#matchers[method];
+    if (!map) {
+      matcher[2][path][0].push([handler, {}]);
+    } else {
+      indexes.forEach((index) => {
+        if (typeof index === "number") {
+          matcher[1][index].push([handler, map]);
+        } else {
+          matcher[2][index || path][0].push([handler, map]);
+        }
+      });
+    }
+  }
+  add(method, path, handler) {
+    if (!this.#matchers[method]) {
+      const all = this.#matchers[METHOD_NAME_ALL];
+      const staticMap = {};
+      for (const key in all[2]) {
+        staticMap[key] = [all[2][key][0].slice(), emptyParam];
+      }
+      this.#matchers[method] = [
+        all[0],
+        all[1].map((list) => Array.isArray(list) ? list.slice() : 0),
+        staticMap
+      ];
+    }
+    if (path === "/*" || path === "*") {
+      const handlerData = [handler, {}];
+      if (method === METHOD_NAME_ALL) {
+        for (const m in this.#matchers) {
+          this.#addWildcard(m, handlerData);
+        }
+      } else {
+        this.#addWildcard(method, handlerData);
+      }
+      return;
+    }
+    const data = this.#relocateMap[path];
+    if (!data) {
+      throw new Error(`Path ${path} is not registered`);
+    }
+    for (const [indexes, map] of data) {
+      if (method === METHOD_NAME_ALL) {
+        for (const m in this.#matchers) {
+          this.#addPath(m, path, handler, indexes, map);
+        }
+      } else {
+        this.#addPath(method, path, handler, indexes, map);
+      }
+    }
+  }
+  buildAllMatchers() {
+    return this.#matchers;
+  }
+  match = match;
+};
+
+// node_modules/hono/dist/router/smart-router/router.js
+var SmartRouter = class {
+  name = "SmartRouter";
+  #routers = [];
+  #routes = [];
+  constructor(init) {
+    this.#routers = init.routers;
+  }
+  add(method, path, handler) {
+    if (!this.#routes) {
+      throw new Error(MESSAGE_MATCHER_IS_ALREADY_BUILT);
+    }
+    this.#routes.push([method, path, handler]);
+  }
+  match(method, path) {
+    if (!this.#routes) {
+      throw new Error("Fatal error");
+    }
+    const routers = this.#routers;
+    const routes = this.#routes;
+    const len = routers.length;
+    let i = 0;
+    let res;
+    for (;i < len; i++) {
+      const router = routers[i];
+      try {
+        for (let i2 = 0, len2 = routes.length;i2 < len2; i2++) {
+          router.add(...routes[i2]);
+        }
+        res = router.match(method, path);
+      } catch (e) {
+        if (e instanceof UnsupportedPathError) {
+          continue;
+        }
+        throw e;
+      }
+      this.match = router.match.bind(router);
+      this.#routers = [router];
+      this.#routes = undefined;
+      break;
+    }
+    if (i === len) {
+      throw new Error("Fatal error");
+    }
+    this.name = `SmartRouter + ${this.activeRouter.name}`;
+    return res;
+  }
+  get activeRouter() {
+    if (this.#routes || this.#routers.length !== 1) {
+      throw new Error("No active router has been determined yet.");
+    }
+    return this.#routers[0];
+  }
+};
+
+// node_modules/hono/dist/router/trie-router/node.js
+var emptyParams = /* @__PURE__ */ Object.create(null);
+var Node2 = class _Node2 {
+  #methods;
+  #children;
+  #patterns;
+  #order = 0;
+  #params = emptyParams;
+  constructor(method, handler, children) {
+    this.#children = children || /* @__PURE__ */ Object.create(null);
+    this.#methods = [];
+    if (method && handler) {
+      const m = /* @__PURE__ */ Object.create(null);
+      m[method] = { handler, possibleKeys: [], score: 0 };
+      this.#methods = [m];
+    }
+    this.#patterns = [];
+  }
+  insert(method, path, handler) {
+    this.#order = ++this.#order;
+    let curNode = this;
+    const parts = splitRoutingPath(path);
+    const possibleKeys = [];
+    for (let i = 0, len = parts.length;i < len; i++) {
+      const p = parts[i];
+      const nextP = parts[i + 1];
+      const pattern = getPattern(p, nextP);
+      const key = Array.isArray(pattern) ? pattern[0] : p;
+      if (key in curNode.#children) {
+        curNode = curNode.#children[key];
+        if (pattern) {
+          possibleKeys.push(pattern[1]);
+        }
+        continue;
+      }
+      curNode.#children[key] = new _Node2;
+      if (pattern) {
+        curNode.#patterns.push(pattern);
+        possibleKeys.push(pattern[1]);
+      }
+      curNode = curNode.#children[key];
+    }
+    curNode.#methods.push({
+      [method]: {
+        handler,
+        possibleKeys: possibleKeys.filter((v, i, a) => a.indexOf(v) === i),
+        score: this.#order
+      }
+    });
+    return curNode;
+  }
+  #getHandlerSets(node, method, nodeParams, params) {
+    const handlerSets = [];
+    for (let i = 0, len = node.#methods.length;i < len; i++) {
+      const m = node.#methods[i];
+      const handlerSet = m[method] || m[METHOD_NAME_ALL];
+      const processedSet = {};
+      if (handlerSet !== undefined) {
+        handlerSet.params = /* @__PURE__ */ Object.create(null);
+        handlerSets.push(handlerSet);
+        if (nodeParams !== emptyParams || params && params !== emptyParams) {
+          for (let i2 = 0, len2 = handlerSet.possibleKeys.length;i2 < len2; i2++) {
+            const key = handlerSet.possibleKeys[i2];
+            const processed = processedSet[handlerSet.score];
+            handlerSet.params[key] = params?.[key] && !processed ? params[key] : nodeParams[key] ?? params?.[key];
+            processedSet[handlerSet.score] = true;
+          }
+        }
+      }
+    }
+    return handlerSets;
+  }
+  search(method, path) {
+    const handlerSets = [];
+    this.#params = emptyParams;
+    const curNode = this;
+    let curNodes = [curNode];
+    const parts = splitPath(path);
+    const curNodesQueue = [];
+    for (let i = 0, len = parts.length;i < len; i++) {
+      const part = parts[i];
+      const isLast = i === len - 1;
+      const tempNodes = [];
+      for (let j = 0, len2 = curNodes.length;j < len2; j++) {
+        const node = curNodes[j];
+        const nextNode = node.#children[part];
+        if (nextNode) {
+          nextNode.#params = node.#params;
+          if (isLast) {
+            if (nextNode.#children["*"]) {
+              handlerSets.push(...this.#getHandlerSets(nextNode.#children["*"], method, node.#params));
+            }
+            handlerSets.push(...this.#getHandlerSets(nextNode, method, node.#params));
+          } else {
+            tempNodes.push(nextNode);
+          }
+        }
+        for (let k = 0, len3 = node.#patterns.length;k < len3; k++) {
+          const pattern = node.#patterns[k];
+          const params = node.#params === emptyParams ? {} : { ...node.#params };
+          if (pattern === "*") {
+            const astNode = node.#children["*"];
+            if (astNode) {
+              handlerSets.push(...this.#getHandlerSets(astNode, method, node.#params));
+              astNode.#params = params;
+              tempNodes.push(astNode);
+            }
+            continue;
+          }
+          const [key, name, matcher] = pattern;
+          if (!part && !(matcher instanceof RegExp)) {
+            continue;
+          }
+          const child = node.#children[key];
+          const restPathString = parts.slice(i).join("/");
+          if (matcher instanceof RegExp) {
+            const m = matcher.exec(restPathString);
+            if (m) {
+              params[name] = m[0];
+              handlerSets.push(...this.#getHandlerSets(child, method, node.#params, params));
+              if (Object.keys(child.#children).length) {
+                child.#params = params;
+                const componentCount = m[0].match(/\//)?.length ?? 0;
+                const targetCurNodes = curNodesQueue[componentCount] ||= [];
+                targetCurNodes.push(child);
+              }
+              continue;
+            }
+          }
+          if (matcher === true || matcher.test(part)) {
+            params[name] = part;
+            if (isLast) {
+              handlerSets.push(...this.#getHandlerSets(child, method, params, node.#params));
+              if (child.#children["*"]) {
+                handlerSets.push(...this.#getHandlerSets(child.#children["*"], method, params, node.#params));
+              }
+            } else {
+              child.#params = params;
+              tempNodes.push(child);
+            }
+          }
+        }
+      }
+      curNodes = tempNodes.concat(curNodesQueue.shift() ?? []);
+    }
+    if (handlerSets.length > 1) {
+      handlerSets.sort((a, b) => {
+        return a.score - b.score;
+      });
+    }
+    return [handlerSets.map(({ handler, params }) => [handler, params])];
+  }
+};
+
+// node_modules/hono/dist/router/trie-router/router.js
+var TrieRouter = class {
+  name = "TrieRouter";
+  #node;
+  constructor() {
+    this.#node = new Node2;
+  }
+  add(method, path, handler) {
+    const results = checkOptionalParameter(path);
+    if (results) {
+      for (let i = 0, len = results.length;i < len; i++) {
+        this.#node.insert(method, results[i], handler);
+      }
+      return;
+    }
+    this.#node.insert(method, path, handler);
+  }
+  match(method, path) {
+    return this.#node.search(method, path);
+  }
+};
+
+// node_modules/hono/dist/hono.js
+var Hono2 = class extends Hono {
+  constructor(options = {}) {
+    super(options);
+    this.router = options.router ?? new SmartRouter({
+      routers: [new RegExpRouter, new TrieRouter]
+    });
+  }
+};
+
+// src/server/cdn.tsx
+import { parse } from "path";
+
+// node_modules/hono/dist/jsx/constants.js
+var DOM_RENDERER = /* @__PURE__ */ Symbol("RENDERER");
+var DOM_ERROR_HANDLER = /* @__PURE__ */ Symbol("ERROR_HANDLER");
+var DOM_INTERNAL_TAG = /* @__PURE__ */ Symbol("INTERNAL");
+var PERMALINK = /* @__PURE__ */ Symbol("PERMALINK");
+
+// node_modules/hono/dist/jsx/dom/utils.js
+var setInternalTagFlag = (fn) => {
+  fn[DOM_INTERNAL_TAG] = true;
+  return fn;
+};
+
+// node_modules/hono/dist/jsx/dom/context.js
+var createContextProviderFunction = (values) => ({ value, children }) => {
+  if (!children) {
+    return;
+  }
+  const props = {
+    children: [
+      {
+        tag: setInternalTagFlag(() => {
+          values.push(value);
+        }),
+        props: {}
+      }
+    ]
+  };
+  if (Array.isArray(children)) {
+    props.children.push(...children.flat());
+  } else {
+    props.children.push(children);
+  }
+  props.children.push({
+    tag: setInternalTagFlag(() => {
+      values.pop();
+    }),
+    props: {}
+  });
+  const res = { tag: "", props, type: "" };
+  res[DOM_ERROR_HANDLER] = (err) => {
+    values.pop();
+    throw err;
+  };
+  return res;
+};
+
+// node_modules/hono/dist/jsx/context.js
+var globalContexts = [];
+var createContext = (defaultValue) => {
+  const values = [defaultValue];
+  const context = (props) => {
+    values.push(props.value);
+    let string;
+    try {
+      string = props.children ? (Array.isArray(props.children) ? new JSXFragmentNode("", {}, props.children) : props.children).toString() : "";
+    } finally {
+      values.pop();
+    }
+    if (string instanceof Promise) {
+      return string.then((resString) => raw(resString, resString.callbacks));
+    } else {
+      return raw(string);
+    }
+  };
+  context.values = values;
+  context.Provider = context;
+  context[DOM_RENDERER] = createContextProviderFunction(values);
+  globalContexts.push(context);
+  return context;
+};
+var useContext = (context) => {
+  return context.values.at(-1);
+};
+
+// node_modules/hono/dist/jsx/intrinsic-element/common.js
+var deDupeKeyMap = {
+  title: [],
+  script: ["src"],
+  style: ["data-href"],
+  link: ["href"],
+  meta: ["name", "httpEquiv", "charset", "itemProp"]
+};
+var domRenderers = {};
+var dataPrecedenceAttr = "data-precedence";
+
+// node_modules/hono/dist/jsx/intrinsic-element/components.js
+var exports_components = {};
+__export(exports_components, {
+  title: () => title,
+  style: () => style,
+  script: () => script,
+  meta: () => meta,
+  link: () => link,
+  input: () => input,
+  form: () => form,
+  button: () => button
+});
+
+// node_modules/hono/dist/jsx/children.js
+var toArray = (children) => Array.isArray(children) ? children : [children];
+
+// node_modules/hono/dist/jsx/intrinsic-element/components.js
+var metaTagMap = /* @__PURE__ */ new WeakMap;
+var insertIntoHead = (tagName, tag, props, precedence) => ({ buffer, context }) => {
+  if (!buffer) {
+    return;
+  }
+  const map = metaTagMap.get(context) || {};
+  metaTagMap.set(context, map);
+  const tags = map[tagName] ||= [];
+  let duped = false;
+  const deDupeKeys = deDupeKeyMap[tagName];
+  if (deDupeKeys.length > 0) {
+    LOOP:
+      for (const [, tagProps] of tags) {
+        for (const key of deDupeKeys) {
+          if ((tagProps?.[key] ?? null) === props?.[key]) {
+            duped = true;
+            break LOOP;
+          }
+        }
+      }
+  }
+  if (duped) {
+    buffer[0] = buffer[0].replaceAll(tag, "");
+  } else if (deDupeKeys.length > 0) {
+    tags.push([tag, props, precedence]);
+  } else {
+    tags.unshift([tag, props, precedence]);
+  }
+  if (buffer[0].indexOf("</head>") !== -1) {
+    let insertTags;
+    if (precedence === undefined) {
+      insertTags = tags.map(([tag2]) => tag2);
+    } else {
+      const precedences = [];
+      insertTags = tags.map(([tag2, , precedence2]) => {
+        let order = precedences.indexOf(precedence2);
+        if (order === -1) {
+          precedences.push(precedence2);
+          order = precedences.length - 1;
+        }
+        return [tag2, order];
+      }).sort((a, b) => a[1] - b[1]).map(([tag2]) => tag2);
+    }
+    insertTags.forEach((tag2) => {
+      buffer[0] = buffer[0].replaceAll(tag2, "");
+    });
+    buffer[0] = buffer[0].replace(/(?=<\/head>)/, insertTags.join(""));
+  }
+};
+var returnWithoutSpecialBehavior = (tag, children, props) => raw(new JSXNode(tag, props, toArray(children ?? [])).toString());
+var documentMetadataTag = (tag, children, props, sort) => {
+  if ("itemProp" in props) {
+    return returnWithoutSpecialBehavior(tag, children, props);
+  }
+  let { precedence, blocking, ...restProps } = props;
+  precedence = sort ? precedence ?? "" : undefined;
+  if (sort) {
+    restProps[dataPrecedenceAttr] = precedence;
+  }
+  const string = new JSXNode(tag, restProps, toArray(children || [])).toString();
+  if (string instanceof Promise) {
+    return string.then((resString) => raw(string, [
+      ...resString.callbacks || [],
+      insertIntoHead(tag, resString, restProps, precedence)
+    ]));
+  } else {
+    return raw(string, [insertIntoHead(tag, string, restProps, precedence)]);
+  }
+};
+var title = ({ children, ...props }) => {
+  const nameSpaceContext = getNameSpaceContext();
+  if (nameSpaceContext) {
+    const context = useContext(nameSpaceContext);
+    if (context === "svg" || context === "head") {
+      return new JSXNode("title", props, toArray(children ?? []));
+    }
+  }
+  return documentMetadataTag("title", children, props, false);
+};
+var script = ({
+  children,
+  ...props
+}) => {
+  const nameSpaceContext = getNameSpaceContext();
+  if (["src", "async"].some((k) => !props[k]) || nameSpaceContext && useContext(nameSpaceContext) === "head") {
+    return returnWithoutSpecialBehavior("script", children, props);
+  }
+  return documentMetadataTag("script", children, props, false);
+};
+var style = ({
+  children,
+  ...props
+}) => {
+  if (!["href", "precedence"].every((k) => (k in props))) {
+    return returnWithoutSpecialBehavior("style", children, props);
+  }
+  props["data-href"] = props.href;
+  delete props.href;
+  return documentMetadataTag("style", children, props, true);
+};
+var link = ({ children, ...props }) => {
+  if (["onLoad", "onError"].some((k) => (k in props)) || props.rel === "stylesheet" && (!("precedence" in props) || ("disabled" in props))) {
+    return returnWithoutSpecialBehavior("link", children, props);
+  }
+  return documentMetadataTag("link", children, props, "precedence" in props);
+};
+var meta = ({ children, ...props }) => {
+  const nameSpaceContext = getNameSpaceContext();
+  if (nameSpaceContext && useContext(nameSpaceContext) === "head") {
+    return returnWithoutSpecialBehavior("meta", children, props);
+  }
+  return documentMetadataTag("meta", children, props, false);
+};
+var newJSXNode = (tag, { children, ...props }) => new JSXNode(tag, props, toArray(children ?? []));
+var form = (props) => {
+  if (typeof props.action === "function") {
+    props.action = PERMALINK in props.action ? props.action[PERMALINK] : undefined;
+  }
+  return newJSXNode("form", props);
+};
+var formActionableElement = (tag, props) => {
+  if (typeof props.formAction === "function") {
+    props.formAction = PERMALINK in props.formAction ? props.formAction[PERMALINK] : undefined;
+  }
+  return newJSXNode(tag, props);
+};
+var input = (props) => formActionableElement("input", props);
+var button = (props) => formActionableElement("button", props);
+
+// node_modules/hono/dist/jsx/utils.js
+var normalizeElementKeyMap = /* @__PURE__ */ new Map([
+  ["className", "class"],
+  ["htmlFor", "for"],
+  ["crossOrigin", "crossorigin"],
+  ["httpEquiv", "http-equiv"],
+  ["itemProp", "itemprop"],
+  ["fetchPriority", "fetchpriority"],
+  ["noModule", "nomodule"],
+  ["formAction", "formaction"]
+]);
+var normalizeIntrinsicElementKey = (key) => normalizeElementKeyMap.get(key) || key;
+var styleObjectForEach = (style2, fn) => {
+  for (const [k, v] of Object.entries(style2)) {
+    const key = k[0] === "-" || !/[A-Z]/.test(k) ? k : k.replace(/[A-Z]/g, (m) => `-${m.toLowerCase()}`);
+    fn(key, v == null ? null : typeof v === "number" ? !key.match(/^(?:a|border-im|column(?:-c|s)|flex(?:$|-[^b])|grid-(?:ar|[^a])|font-w|li|or|sca|st|ta|wido|z)|ty$/) ? `${v}px` : `${v}` : v);
+  }
+};
+
+// node_modules/hono/dist/jsx/base.js
+var nameSpaceContext = undefined;
+var getNameSpaceContext = () => nameSpaceContext;
+var toSVGAttributeName = (key) => /[A-Z]/.test(key) && key.match(/^(?:al|basel|clip(?:Path|Rule)$|co|do|fill|fl|fo|gl|let|lig|i|marker[EMS]|o|pai|pointe|sh|st[or]|text[^L]|tr|u|ve|w)/) ? key.replace(/([A-Z])/g, "-$1").toLowerCase() : key;
+var emptyTags = [
+  "area",
+  "base",
+  "br",
+  "col",
+  "embed",
+  "hr",
+  "img",
+  "input",
+  "keygen",
+  "link",
+  "meta",
+  "param",
+  "source",
+  "track",
+  "wbr"
+];
+var booleanAttributes = [
+  "allowfullscreen",
+  "async",
+  "autofocus",
+  "autoplay",
+  "checked",
+  "controls",
+  "default",
+  "defer",
+  "disabled",
+  "download",
+  "formnovalidate",
+  "hidden",
+  "inert",
+  "ismap",
+  "itemscope",
+  "loop",
+  "multiple",
+  "muted",
+  "nomodule",
+  "novalidate",
+  "open",
+  "playsinline",
+  "readonly",
+  "required",
+  "reversed",
+  "selected"
+];
+var childrenToStringToBuffer = (children, buffer) => {
+  for (let i = 0, len = children.length;i < len; i++) {
+    const child = children[i];
+    if (typeof child === "string") {
+      escapeToBuffer(child, buffer);
+    } else if (typeof child === "boolean" || child === null || child === undefined) {
+      continue;
+    } else if (child instanceof JSXNode) {
+      child.toStringToBuffer(buffer);
+    } else if (typeof child === "number" || child.isEscaped) {
+      buffer[0] += child;
+    } else if (child instanceof Promise) {
+      buffer.unshift("", child);
+    } else {
+      childrenToStringToBuffer(child, buffer);
+    }
+  }
+};
+var JSXNode = class {
+  tag;
+  props;
+  key;
+  children;
+  isEscaped = true;
+  localContexts;
+  constructor(tag, props, children) {
+    this.tag = tag;
+    this.props = props;
+    this.children = children;
+  }
+  get type() {
+    return this.tag;
+  }
+  get ref() {
+    return this.props.ref || null;
+  }
+  toString() {
+    const buffer = [""];
+    this.localContexts?.forEach(([context, value]) => {
+      context.values.push(value);
+    });
+    try {
+      this.toStringToBuffer(buffer);
+    } finally {
+      this.localContexts?.forEach(([context]) => {
+        context.values.pop();
+      });
+    }
+    return buffer.length === 1 ? "callbacks" in buffer ? resolveCallbackSync(raw(buffer[0], buffer.callbacks)).toString() : buffer[0] : stringBufferToString(buffer, buffer.callbacks);
+  }
+  toStringToBuffer(buffer) {
+    const tag = this.tag;
+    const props = this.props;
+    let { children } = this;
+    buffer[0] += `<${tag}`;
+    const normalizeKey = nameSpaceContext && useContext(nameSpaceContext) === "svg" ? (key) => toSVGAttributeName(normalizeIntrinsicElementKey(key)) : (key) => normalizeIntrinsicElementKey(key);
+    for (let [key, v] of Object.entries(props)) {
+      key = normalizeKey(key);
+      if (key === "children") {} else if (key === "style" && typeof v === "object") {
+        let styleStr = "";
+        styleObjectForEach(v, (property, value) => {
+          if (value != null) {
+            styleStr += `${styleStr ? ";" : ""}${property}:${value}`;
+          }
+        });
+        buffer[0] += ' style="';
+        escapeToBuffer(styleStr, buffer);
+        buffer[0] += '"';
+      } else if (typeof v === "string") {
+        buffer[0] += ` ${key}="`;
+        escapeToBuffer(v, buffer);
+        buffer[0] += '"';
+      } else if (v === null || v === undefined) {} else if (typeof v === "number" || v.isEscaped) {
+        buffer[0] += ` ${key}="${v}"`;
+      } else if (typeof v === "boolean" && booleanAttributes.includes(key)) {
+        if (v) {
+          buffer[0] += ` ${key}=""`;
+        }
+      } else if (key === "dangerouslySetInnerHTML") {
+        if (children.length > 0) {
+          throw new Error("Can only set one of `children` or `props.dangerouslySetInnerHTML`.");
+        }
+        children = [raw(v.__html)];
+      } else if (v instanceof Promise) {
+        buffer[0] += ` ${key}="`;
+        buffer.unshift('"', v);
+      } else if (typeof v === "function") {
+        if (!key.startsWith("on") && key !== "ref") {
+          throw new Error(`Invalid prop '${key}' of type 'function' supplied to '${tag}'.`);
+        }
+      } else {
+        buffer[0] += ` ${key}="`;
+        escapeToBuffer(v.toString(), buffer);
+        buffer[0] += '"';
+      }
+    }
+    if (emptyTags.includes(tag) && children.length === 0) {
+      buffer[0] += "/>";
+      return;
+    }
+    buffer[0] += ">";
+    childrenToStringToBuffer(children, buffer);
+    buffer[0] += `</${tag}>`;
+  }
+};
+var JSXFunctionNode = class extends JSXNode {
+  toStringToBuffer(buffer) {
+    const { children } = this;
+    const props = { ...this.props };
+    if (children.length) {
+      props.children = children.length === 1 ? children[0] : children;
+    }
+    const res = this.tag.call(null, props);
+    if (typeof res === "boolean" || res == null) {
+      return;
+    } else if (res instanceof Promise) {
+      if (globalContexts.length === 0) {
+        buffer.unshift("", res);
+      } else {
+        const currentContexts = globalContexts.map((c) => [c, c.values.at(-1)]);
+        buffer.unshift("", res.then((childRes) => {
+          if (childRes instanceof JSXNode) {
+            childRes.localContexts = currentContexts;
+          }
+          return childRes;
+        }));
+      }
+    } else if (res instanceof JSXNode) {
+      res.toStringToBuffer(buffer);
+    } else if (typeof res === "number" || res.isEscaped) {
+      buffer[0] += res;
+      if (res.callbacks) {
+        buffer.callbacks ||= [];
+        buffer.callbacks.push(...res.callbacks);
+      }
+    } else {
+      escapeToBuffer(res, buffer);
+    }
+  }
+};
+var JSXFragmentNode = class extends JSXNode {
+  toStringToBuffer(buffer) {
+    childrenToStringToBuffer(this.children, buffer);
+  }
+};
+var initDomRenderer = false;
+var jsxFn = (tag, props, children) => {
+  if (!initDomRenderer) {
+    for (const k in domRenderers) {
+      exports_components[k][DOM_RENDERER] = domRenderers[k];
+    }
+    initDomRenderer = true;
+  }
+  if (typeof tag === "function") {
+    return new JSXFunctionNode(tag, props, children);
+  } else if (exports_components[tag]) {
+    return new JSXFunctionNode(exports_components[tag], props, children);
+  } else if (tag === "svg" || tag === "head") {
+    nameSpaceContext ||= createContext("");
+    return new JSXNode(tag, props, [
+      new JSXFunctionNode(nameSpaceContext, {
+        value: tag
+      }, children)
+    ]);
+  } else {
+    return new JSXNode(tag, props, children);
+  }
+};
+var Fragment = ({
+  children
+}) => {
+  return new JSXFragmentNode("", {
+    children
+  }, Array.isArray(children) ? children : children ? [children] : []);
+};
+
+// node_modules/hono/dist/jsx/jsx-dev-runtime.js
+function jsxDEV(tag, props, key) {
+  let node;
+  if (!props || !("children" in props)) {
+    node = jsxFn(tag, props, []);
+  } else {
+    const children = props.children;
+    node = Array.isArray(children) ? jsxFn(tag, props, children) : jsxFn(tag, props, [children]);
+  }
+  node.key = key;
+  return node;
+}
+
+// src/server/cdn.tsx
+var CDN_BASE = (Bun.env.CDN_BASE ?? "http://localhost:4500").replace(/\/+$/, "");
+var state = {
+  base: CDN_BASE,
+  manifestUrl: CDN_BASE + "/manifest.json",
+  pollMs: Number(Bun.env.CDN_MANIFEST_POLL_MS ?? "2000"),
+  manifest: null,
+  etag: null,
+  lastLoadedAt: null,
+  lastError: null,
+  _refreshing: false,
+  _timer: null
+};
+function uniq(xs) {
+  return [...new Set(xs)];
+}
+function joinUrl(base, path) {
+  const b = base.replace(/\/+$/, "");
+  const p = path.startsWith("/") ? path : `/${path}`;
+  return `${b}${p}`;
+}
+async function initCdnManifest(opts) {
+  if (false) {}
+}
+function resolveEntryKey(src, manifest) {
+  if (manifest[src]?.isEntry)
+    return src;
+  const candidates = uniq([
+    src,
+    src.startsWith("/") ? src.slice(1) : src,
+    src.startsWith("src/") ? src : `src/${src}`,
+    src.endsWith(".tsx") ? src : `${src}.tsx`
+  ]);
+  for (const c of candidates) {
+    if (manifest[c]?.isEntry)
+      return c;
+  }
+  const base = src.split("/").pop();
+  const matches = Object.keys(manifest).filter((k) => manifest[k]?.isEntry && k.endsWith(`/${base}`));
+  if (matches.length === 1)
+    return matches[0];
+  return null;
+}
+function CDN(props) {
+  if (true) {
+    return /* @__PURE__ */ jsxDEV("script", {
+      type: "module",
+      src: props.src
+    }, undefined, false, undefined, this);
+  }
+  const manifest = state.manifest;
+  if (!manifest) {
+    throw new Error(`CDN manifest not loaded (url=${state.manifestUrl}). Last error: ${state.lastError ?? "none"}`);
+  }
+  const key = resolveEntryKey(props.src, manifest);
+  if (!key) {
+    throw new Error(`CDN entry not found for "${props.src}". (Try exact manifest key like "src/main.tsx")`);
+  }
+  const entry = manifest[key];
+  const preloads = uniq(entry.imports ?? []).map((k) => manifest[k]?.file).filter(Boolean);
+  const css = uniq(entry.css ?? []);
+  const moduleSrc = entry.file;
+  return /* @__PURE__ */ jsxDEV(Fragment, {
+    children: [
+      preloads.map((f) => /* @__PURE__ */ jsxDEV("link", {
+        rel: "modulepreload",
+        href: joinUrl(state.base, f)
+      }, undefined, false, undefined, this)),
+      css.map((c) => /* @__PURE__ */ jsxDEV("link", {
+        rel: "stylesheet",
+        href: joinUrl(state.base, c)
+      }, undefined, false, undefined, this)),
+      /* @__PURE__ */ jsxDEV("script", {
+        type: "module",
+        src: joinUrl(state.base, moduleSrc)
+      }, undefined, false, undefined, this)
+    ]
+  }, undefined, true, undefined, this);
+}
+function Preamble() {
+  if (true) {
+    return /* @__PURE__ */ jsxDEV(Fragment, {
+      children: [
+        raw(`
+<script type="module">import { injectIntoGlobalHook } from "/@react-refresh";
+injectIntoGlobalHook(window);
+window.$RefreshReg$ = () => {};
+window.$RefreshSig$ = () => (type) => type;</script>
+
+<script type="module" src="/@vite/client"></script>`),
+        /* @__PURE__ */ jsxDEV(CDN, {
+          src: "src/shared.tsx"
+        }, undefined, false, undefined, this)
+      ]
+    }, undefined, true, undefined, this);
+  }
+  return /* @__PURE__ */ jsxDEV(CDN, {
+    src: "src/shared.tsx"
+  }, undefined, false, undefined, this);
+}
+function CDNBrandImage({ src, ...rest }) {
+  const parsed = parse(src);
+  console.log(parsed);
+  if (true) {
+    return /* @__PURE__ */ jsxDEV("img", {
+      src: `/brandimages/${parsed.base}`,
+      ...rest
+    }, undefined, false, undefined, this);
+  }
+  return /* @__PURE__ */ jsxDEV("img", {
+    src: CDN_BASE + "/brandimages/" + parsed.base,
+    ...rest
+  }, undefined, false, undefined, this);
+}
+
+// node_modules/hono/dist/helper/proxy/index.js
+var hopByHopHeaders = [
+  "connection",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade"
+];
+var ALLOWED_TOKEN_PATTERN = /^[!#$%&'*+\-.0-9A-Z^_`a-z|~]+$/;
+var buildRequestInitFromRequest = (request, strictConnectionProcessing) => {
+  if (!request) {
+    return {};
+  }
+  const headers = new Headers(request.headers);
+  if (strictConnectionProcessing) {
+    const connectionValue = headers.get("connection");
+    if (connectionValue) {
+      const headerNames = connectionValue.split(",").map((h) => h.trim());
+      const invalidHeaders = headerNames.filter((h) => !ALLOWED_TOKEN_PATTERN.test(h));
+      if (invalidHeaders.length > 0) {
+        throw new HTTPException(400, {
+          message: `Invalid Connection header value: ${invalidHeaders.join(", ")}`
+        });
+      }
+      headerNames.forEach((headerName) => {
+        headers.delete(headerName);
+      });
+    }
+  }
+  hopByHopHeaders.forEach((header) => {
+    headers.delete(header);
+  });
+  return {
+    method: request.method,
+    body: request.body,
+    duplex: request.body ? "half" : undefined,
+    headers,
+    signal: request.signal
+  };
+};
+var preprocessRequestInit = (requestInit) => {
+  if (!requestInit.headers || Array.isArray(requestInit.headers) || requestInit.headers instanceof Headers) {
+    return requestInit;
+  }
+  const headers = new Headers;
+  for (const [key, value] of Object.entries(requestInit.headers)) {
+    if (value == null) {
+      headers.delete(key);
+    } else {
+      headers.set(key, value);
+    }
+  }
+  requestInit.headers = headers;
+  return requestInit;
+};
+var proxy = async (input2, proxyInit) => {
+  const {
+    raw: raw2,
+    customFetch,
+    strictConnectionProcessing = false,
+    ...requestInit
+  } = proxyInit instanceof Request ? { raw: proxyInit } : proxyInit ?? {};
+  const req = new Request(input2, {
+    ...buildRequestInitFromRequest(raw2, strictConnectionProcessing),
+    ...preprocessRequestInit(requestInit)
+  });
+  req.headers.delete("accept-encoding");
+  const res = await (customFetch || fetch)(req);
+  const resHeaders = new Headers(res.headers);
+  hopByHopHeaders.forEach((header) => {
+    resHeaders.delete(header);
+  });
+  if (resHeaders.has("content-encoding")) {
+    resHeaders.delete("content-encoding");
+    resHeaders.delete("content-length");
+  }
+  return new Response(res.body, {
+    status: res.status,
+    statusText: res.statusText,
+    headers: resHeaders
+  });
+};
+
+// node_modules/jose/dist/webapi/lib/buffer_utils.js
+var encoder = new TextEncoder;
+var decoder = new TextDecoder;
+var MAX_INT32 = 2 ** 32;
+
+// node_modules/jose/dist/webapi/lib/base64.js
+function decodeBase64(encoded) {
+  if (Uint8Array.fromBase64) {
+    return Uint8Array.fromBase64(encoded);
+  }
+  const binary = atob(encoded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0;i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+// node_modules/jose/dist/webapi/util/base64url.js
+function decode(input2) {
+  if (Uint8Array.fromBase64) {
+    return Uint8Array.fromBase64(typeof input2 === "string" ? input2 : decoder.decode(input2), {
+      alphabet: "base64url"
+    });
+  }
+  let encoded = input2;
+  if (encoded instanceof Uint8Array) {
+    encoded = decoder.decode(encoded);
+  }
+  encoded = encoded.replace(/-/g, "+").replace(/_/g, "/");
+  try {
+    return decodeBase64(encoded);
+  } catch {
+    throw new TypeError("The input to be decoded is not correctly encoded.");
+  }
+}
+
+// node_modules/jose/dist/webapi/util/errors.js
+class JOSEError extends Error {
+  static code = "ERR_JOSE_GENERIC";
+  code = "ERR_JOSE_GENERIC";
+  constructor(message, options) {
+    super(message, options);
+    this.name = this.constructor.name;
+    Error.captureStackTrace?.(this, this.constructor);
+  }
+}
+class JWTInvalid extends JOSEError {
+  static code = "ERR_JWT_INVALID";
+  code = "ERR_JWT_INVALID";
+}
+
+// node_modules/jose/dist/webapi/lib/is_object.js
+var isObjectLike = (value) => typeof value === "object" && value !== null;
+function isObject(input2) {
+  if (!isObjectLike(input2) || Object.prototype.toString.call(input2) !== "[object Object]") {
+    return false;
+  }
+  if (Object.getPrototypeOf(input2) === null) {
+    return true;
+  }
+  let proto = input2;
+  while (Object.getPrototypeOf(proto) !== null) {
+    proto = Object.getPrototypeOf(proto);
+  }
+  return Object.getPrototypeOf(input2) === proto;
+}
+
+// node_modules/jose/dist/webapi/util/decode_jwt.js
+function decodeJwt(jwt) {
+  if (typeof jwt !== "string")
+    throw new JWTInvalid("JWTs must use Compact JWS serialization, JWT must be a string");
+  const { 1: payload, length } = jwt.split(".");
+  if (length === 5)
+    throw new JWTInvalid("Only JWTs using Compact JWS serialization can be decoded");
+  if (length !== 3)
+    throw new JWTInvalid("Invalid JWT");
+  if (!payload)
+    throw new JWTInvalid("JWTs must contain a payload");
+  let decoded;
+  try {
+    decoded = decode(payload);
+  } catch {
+    throw new JWTInvalid("Failed to base64url decode the payload");
+  }
+  let result;
+  try {
+    result = JSON.parse(decoder.decode(decoded));
+  } catch {
+    throw new JWTInvalid("Failed to parse the decoded payload as JSON");
+  }
+  if (!isObject(result))
+    throw new JWTInvalid("Invalid JWT Claims Set");
+  return result;
+}
+// ../hf-theme/public/cutout-simple-hellofromapp-classy-512.png
+var cutout_simple_hellofromapp_classy_512_default = "./cutout-simple-hellofromapp-classy-512.blue.png";
+
+// src/server/index.tsx
+console.log(cutout_simple_hellofromapp_classy_512_default);
+await initCdnManifest({
+  base: Bun.env.CDN_BASE ?? "http://localhost:4500",
+  manifestUrl: `${Bun.env.CDN_BASE ?? "http://localhost:4500"}/manifest.json`,
+  pollMs: 2000
+});
+var app = new Hono2;
+app.get("/", (c) => c.html(/* @__PURE__ */ jsxDEV("html", {
+  lang: "en",
+  children: [
+    /* @__PURE__ */ jsxDEV("head", {
+      children: [
+        /* @__PURE__ */ jsxDEV("title", {
+          children: "Hello From App"
+        }, undefined, false, undefined, this),
+        /* @__PURE__ */ jsxDEV(Preamble, {}, undefined, false, undefined, this),
+        process.env.ENABLE_TRACKING ? /* @__PURE__ */ jsxDEV("script", {
+          defer: true,
+          src: "/u_session/main.js",
+          "data-website-id": "93bc43e5-2f8b-4811-8552-a16af2fe40a0"
+        }, undefined, false, undefined, this) : null
+      ]
+    }, undefined, true, undefined, this),
+    /* @__PURE__ */ jsxDEV("body", {
+      className: "bg-bubblegum-paleYellow flex flex-col justify-center-safe align-middle min-h-dvh min-w-dvw gap-12",
+      children: [
+        /* @__PURE__ */ jsxDEV(CDNBrandImage, {
+          src: cutout_simple_hellofromapp_classy_512_default,
+          width: 512,
+          height: 512,
+          className: "ml-auto mr-auto",
+          alt: "Hello From App"
+        }, undefined, false, undefined, this),
+        /* @__PURE__ */ jsxDEV("h1", {
+          className: "text-center text-6xl pl-[2rem] pr-[2rem]",
+          children: "Start using that computer in your pocket for real connections."
+        }, undefined, false, undefined, this),
+        /* @__PURE__ */ jsxDEV("div", {
+          className: "flex gap-6  w-[40rem] ml-auto mr-auto",
+          children: [
+            /* @__PURE__ */ jsxDEV("button", {
+              id: "homeDoRegister",
+              className: "bg-bubblegum-mint p-6 flex-2 rounded-2xl bebas text-6xl text-winter-deepMidnight",
+              children: "Register"
+            }, undefined, false, undefined, this),
+            /* @__PURE__ */ jsxDEV("button", {
+              id: "homeDoSignIn",
+              className: "bg-bubblegum-pink p-6 flex-2 rounded-2xl bebas text-6xl text-winter-deepMidnight",
+              children: "Sign In"
+            }, undefined, false, undefined, this)
+          ]
+        }, undefined, true, undefined, this)
+      ]
+    }, undefined, true, undefined, this)
+  ]
+}, undefined, true, undefined, this)));
+app.all("/signin-callback", (c) => {
+  return c.html(/* @__PURE__ */ jsxDEV("html", {
+    children: [
+      /* @__PURE__ */ jsxDEV("head", {
+        children: [
+          /* @__PURE__ */ jsxDEV("title", {
+            children: "Hello From App | Signing in..."
+          }, undefined, false, undefined, this),
+          /* @__PURE__ */ jsxDEV(Preamble, {}, undefined, false, undefined, this),
+          /* @__PURE__ */ jsxDEV(CDN, {
+            src: "src/signincallback.tsx"
+          }, undefined, false, undefined, this)
+        ]
+      }, undefined, true, undefined, this),
+      /* @__PURE__ */ jsxDEV("body", {
+        children: /* @__PURE__ */ jsxDEV("div", {
+          id: "root"
+        }, undefined, false, undefined, this)
+      }, undefined, false, undefined, this)
+    ]
+  }, undefined, true, undefined, this));
+});
+app.all("/silentrenew", (c) => {
+  console.log("silentRenew");
+  return c.html(/* @__PURE__ */ jsxDEV("html", {
+    children: [
+      /* @__PURE__ */ jsxDEV("head", {
+        children: [
+          /* @__PURE__ */ jsxDEV("title", {
+            children: "Hello From App | Renewing..."
+          }, undefined, false, undefined, this),
+          /* @__PURE__ */ jsxDEV(Preamble, {}, undefined, false, undefined, this),
+          /* @__PURE__ */ jsxDEV(CDN, {
+            src: "src/silentrenew.tsx"
+          }, undefined, false, undefined, this)
+        ]
+      }, undefined, true, undefined, this),
+      /* @__PURE__ */ jsxDEV("body", {
+        children: /* @__PURE__ */ jsxDEV("div", {
+          id: "root"
+        }, undefined, false, undefined, this)
+      }, undefined, false, undefined, this)
+    ]
+  }, undefined, true, undefined, this));
+});
+app.get("/home", (c) => c.html(/* @__PURE__ */ jsxDEV("html", {
+  children: [
+    /* @__PURE__ */ jsxDEV("head", {
+      children: [
+        /* @__PURE__ */ jsxDEV("title", {
+          children: "Hello From App | Home"
+        }, undefined, false, undefined, this),
+        /* @__PURE__ */ jsxDEV(Preamble, {}, undefined, false, undefined, this),
+        /* @__PURE__ */ jsxDEV(CDN, {
+          src: "src/authed.tsx"
+        }, undefined, false, undefined, this)
+      ]
+    }, undefined, true, undefined, this),
+    /* @__PURE__ */ jsxDEV("body", {
+      children: /* @__PURE__ */ jsxDEV("div", {
+        id: "root"
+      }, undefined, false, undefined, this)
+    }, undefined, false, undefined, this)
+  ]
+}, undefined, true, undefined, this)));
+var r = app.use("/api/*", async (c, next) => {
+  const token = c.req.header("Authorization")?.replace(/^Bearer /i, "") ?? null;
+  console.log({ token });
+  if (token) {
+    const claims = decodeJwt(token);
+    console.log(claims);
+  }
+  const res = await fetch("https://auth.hellofrom.app/realms/u/protocol/openid-connect/userinfo", {
+    headers: {
+      Authorization: "Bearer " + token
+    }
+  });
+  const body = await res.json();
+  console.log({ body });
+  return await next();
+}).get("/api", (c) => {
+  return c.json({ foo: true });
+}).get("/api/v2", (c) => {
+  console.log("v2");
+  return c.json({ foo: 2 });
+});
+app.get("/_health", (c) => {
+  const colorHeader = c.req.header("x-hf-color") ?? "unspecified";
+  const colorEnv = process.env?.COLOR ?? "unspecified";
+  return c.json({ colorHeader, colorEnv });
+});
+if (process.env.ENABLE_TRACKING) {
+  app.all("/u_session/*", (c) => {
+    return proxy(`http://umami:3000${c.req.path}`, {
+      ...c.req
+    });
+  });
+}
+if (true) {
+  app.all("*", (c) => {
+    return proxy(`http://localhost:4500${c.req.path}`, {
+      ...c.req
+    });
+  });
+}
+var server_default = {
+  fetch: app.fetch,
+  port: 5173
+};
+export {
+  server_default as default
+};
