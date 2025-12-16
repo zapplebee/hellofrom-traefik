@@ -108,3 +108,8 @@ networks:
     name: hf_svc_keycloak
     driver: bridge
     internal: true
+
+  hf_svc_umami:
+    name: hf_svc_umami
+    driver: bridge
+    internal: true
