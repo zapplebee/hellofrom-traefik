@@ -2454,7 +2454,7 @@ function decodeJwt(jwt) {
   return result;
 }
 // ../hf-theme/public/cutout-simple-hellofromapp-classy-512.png
-var cutout_simple_hellofromapp_classy_512_default = "./cutout-simple-hellofromapp-classy-512.blue.png";
+var cutout_simple_hellofromapp_classy_512_default = "./cutout-simple-hellofromapp-classy-512.png";
 
 // src/server/index.tsx
 console.log(cutout_simple_hellofromapp_classy_512_default);
