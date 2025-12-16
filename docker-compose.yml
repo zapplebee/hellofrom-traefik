@@ -28,6 +28,15 @@ services:
       - --log.level=INFO
       - --accesslog=true
 
+      - "--accesslog.format=json"
+      - "--accesslog.fields.defaultmode=keep"
+      - "--accesslog.fields.headers.defaultmode=drop"
+
+      # Keep useful headers
+      - "--accesslog.fields.headers.names.X-Forwarded-For=keep"
+      - "--accesslog.fields.headers.names.X-Request-Id=keep"
+      - "--accesslog.fields.headers.names.User-Agent=keep"
+
     ports:
       - "80:80"
       - "443:443"
