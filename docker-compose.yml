@@ -123,12 +123,12 @@ services:
       - ENABLE_CDN=1
 
     networks:
-      - hf_webapp
+      - hf_svc_webapp
       - hf_svc_umami
 
     labels:
       - traefik.enable=true
-      - traefik.docker.network=hf_webapp
+      - traefik.docker.network=hf_svc_webapp
       - traefik.http.services.hellofrom-blue.loadbalancer.server.port=5173
 
       - traefik.http.middlewares.hf-color-blue.headers.customResponseHeaders.X-HF-Color=blue
@@ -161,12 +161,12 @@ services:
       - ENABLE_CDN=1
 
     networks:
-      - hf_webapp
+      - hf_svc_webapp
       - hf_svc_umami
 
     labels:
       - traefik.enable=true
-      - traefik.docker.network=hf_webapp
+      - traefik.docker.network=hf_svc_webapp
       - traefik.http.services.hellofrom-green.loadbalancer.server.port=5173
 
       - traefik.http.middlewares.hf-color-green.headers.customResponseHeaders.X-HF-Color=green
