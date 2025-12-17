@@ -21,8 +21,6 @@ services:
     image: traefik:v3.6.4
     container_name: traefik
     restart: unless-stopped
-    profiles:
-      - main
 
     command:
       - --providers.docker=true
@@ -85,8 +83,6 @@ services:
     image: portainer/portainer-ce:lts
     container_name: portainer
     restart: unless-stopped
-    profiles:
-      - main
 
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -111,9 +107,6 @@ services:
   hellofrom_blue:
     image: oven/bun:1.3.3
     container_name: hellofrom_blue
-    profiles:
-      - main
-      - blue
     restart: unless-stopped
 
     working_dir: /app
