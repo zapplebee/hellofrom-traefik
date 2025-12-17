@@ -99,7 +99,7 @@ services:
       - traefik.http.routers.portainer.tls.certresolver=le
 
       # your existing local-only rule
-      - traefik.http.routers.portainer.middlewares=hf-local@docker
+      - traefik.http.routers.portainer.middlewares=hf-localonly@docker
 
       # simplest: Traefik -> Portainer over HTTP (Portainer's legacy port)
       - traefik.http.services.portainer.loadbalancer.server.port=9000
