@@ -1,17 +1,32 @@
 version: "3.9"
 
+#######################################################
+#         T R A E F I K  &  E D G E                   #
+#                                                     #
+#  Start the traefik service and the blue deployment  #
+#    docker compose --profile main up                 #
+#                                                     #
+#  Start the green deployment this will take higher   #
+#  priority than the blue deployment                  #
+#    docker compose --profile green up                #
+#                                                     #
+#  Stop the green profile and blue will take over     #
+#  in priority                                        #
+#    docker compose --profile green down              #
+#                                                     #
+#######################################################
+
 services:
   traefik:
     image: traefik:v3.6.4
     container_name: traefik
     restart: unless-stopped
+    profiles:
+      - main
 
     command:
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
-
-      - --providers.file.directory=/etc/traefik/dynamic/enabled
-      - --providers.file.watch=true
 
       - --entrypoints.web.address=:80
       - --entrypoints.web.http.redirections.entrypoint.to=websecure
@@ -46,14 +61,14 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./traefik-letsencrypt:/letsencrypt
-      # mount the full dynamic tree so /enabled exists
-      - ./dynamic:/etc/traefik/dynamic:ro
 
     networks:
       - hf_edge
       - hf_svc_keycloak
       - hf_svc_umami
       - hf_svc_openobserve
+      - hf_svc_portainer
+      - hf_svc_webapp
 
     labels:
       - traefik.enable=true
@@ -66,9 +81,39 @@ services:
       - traefik.http.routers.traefik-ui.service=api@internal
       - traefik.http.routers.traefik-ui.middlewares=hf-localonly@docker
 
+  portainer:
+    image: portainer/portainer-ce:lts
+    container_name: portainer
+    restart: unless-stopped
+    profiles:
+      - main
+
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./portainer_data:/data
+
+    networks:
+      - hf_svc_portainer
+
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.portainer.rule=Host(`portainer.hellofrom.app`)
+      - traefik.http.routers.portainer.entrypoints=websecure
+      - traefik.http.routers.portainer.tls=true
+      - traefik.http.routers.portainer.tls.certresolver=le
+
+      # your existing local-only rule
+      - traefik.http.routers.portainer.middlewares=hf-local@docker
+
+      # simplest: Traefik -> Portainer over HTTP (Portainer's legacy port)
+      - traefik.http.services.portainer.loadbalancer.server.port=9000
+
   hellofrom_blue:
     image: oven/bun:1.3.3
     container_name: hellofrom_blue
+    profiles:
+      - main
+      - blue
     restart: unless-stopped
 
     working_dir: /app
@@ -85,39 +130,72 @@ services:
       - ENABLE_CDN=1
 
     networks:
-      - hf_edge
+      - hf_webapp
       - hf_svc_umami
 
     labels:
       - traefik.enable=true
+      - traefik.docker.network=hf_webapp
       - traefik.http.services.hellofrom-blue.loadbalancer.server.port=5173
+
+      - traefik.http.middlewares.hf-color-blue.headers.customResponseHeaders.X-HF-Color=blue
+
+      - traefik.http.routers.hellofrom-blue.rule=Host(`hellofrom.app`)
+      - traefik.http.routers.hellofrom-blue.entrypoints=websecure
+      - traefik.http.routers.hellofrom-blue.tls=true
+      - traefik.http.routers.hellofrom-blue.tls.certresolver=le
+      - traefik.http.routers.hellofrom-blue.priority=10
+      - traefik.http.routers.hellofrom-blue.service=hellofrom-blue
 
   hellofrom_green:
     image: oven/bun:1.3.3
     container_name: hellofrom_green
     restart: unless-stopped
+    profiles:
+      - green
 
     working_dir: /app
     command: ["bun", "/app/index.js"]
 
     volumes:
-      - ./index.js:/app/index.js:ro
+      - ./index.blue.js:/app/index.js:ro
 
     environment:
       - COLOR=green
       - NODE_ENV=prov
       - CDN_BASE=https://dev.hellofrom.pages.dev
+      - ENABLE_TRACKING=1
+      - ENABLE_CDN=1
 
     networks:
-      - hf_edge
+      - hf_webapp
+      - hf_svc_umami
 
     labels:
       - traefik.enable=true
+      - traefik.docker.network=hf_webapp
       - traefik.http.services.hellofrom-green.loadbalancer.server.port=5173
+
+      - traefik.http.middlewares.hf-color-green.headers.customResponseHeaders.X-HF-Color=green
+
+      - traefik.http.routers.hellofrom-green.rule=Host(`hellofrom.app`)
+      - traefik.http.routers.hellofrom-green.entrypoints=websecure
+      - traefik.http.routers.hellofrom-green.tls=true
+      - traefik.http.routers.hellofrom-green.tls.certresolver=le
+      - traefik.http.routers.hellofrom-green.priority=100
+      - traefik.http.routers.hellofrom-green.service=hellofrom-green
 
 networks:
   hf_edge:
     name: hf_edge
+    driver: bridge
+
+  hf_svc_portainer:
+    name: hf_svc_portainer
+    driver: bridge
+
+  hf_svc_webapp:
+    name: hf_svc_webapp
     driver: bridge
 
   hf_svc_keycloak:

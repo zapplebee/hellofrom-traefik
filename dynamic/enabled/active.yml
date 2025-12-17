@@ -1,9 +1,0 @@
-http:
-  routers:
-    hellofrom-live:
-      rule: Host(`hellofrom.app`)
-      entryPoints:
-        - websecure
-      tls:
-        certResolver: le
-      service: hellofrom-blue@docker

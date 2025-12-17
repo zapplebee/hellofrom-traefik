@@ -1,46 +1,58 @@
-# HelloFrom Traefik Gateway
+# hellofrom-bluegreen
 
-This repo contains the **internet-facing Traefik gateway** for HelloFrom.
+A tiny, **Docker Compose + Traefik** setup for **blue/green cutovers** of `hellofrom.app` using **router priority**.
 
-It:
-
-- Terminates TLS for services using **Let’s Encrypt (HTTP-01)**.
-- Redirects all HTTP → HTTPS.
-- Discovers backends via **Docker labels** (Docker provider).
-- Exposes the Traefik dashboard/API **only on localhost** (`127.0.0.1:8080`).
-- Defines a reusable **localhost-only allowlist middleware** (`hf-localonly`) that other stacks can reference.
+- **Blue** is the default live deployment.
+- **Green** can be started temporarily and will take traffic (higher priority).
+- Stopping green rolls traffic back to blue.
 
 ---
 
 ## What’s in here
 
-- `docker-compose.yml` – runs Traefik with:
+- `docker-compose.yml`
+  Runs:
 
-  - entrypoints:
+  - `traefik` (edge proxy, Let’s Encrypt, JSON access logs)
+  - `hellofrom_blue` (Bun container running `index.blue.js`)
+  - `hellofrom_green` (Bun container running `index.js`)
 
-    - `web` on `:80`
-    - `websecure` on `:443`
-    - `traefik` (dashboard/API) on `:8080` (localhost only)
+- `index.blue.js`
+  The blue variant of the app entrypoint.
 
-  - ACME storage at `./traefik-letsencrypt/acme.json`
-  - Docker provider with `exposedByDefault=false` (nothing routes unless explicitly labeled)
+- `index.js`
+  The green variant of the app entrypoint.
 
-- `./traefik-letsencrypt/` – persistent Let’s Encrypt state (do **not** delete unless you want to re-issue certs)
+- `./traefik-letsencrypt/`
+  Local storage for Let’s Encrypt `acme.json`.
+
+---
+
+## How blue/green works
+
+Traefik can have **two routers matching the same host rule** (`Host(\`hellofrom.app`)`). When both exist:
+
+- the router with the **higher `priority` wins**
+- cutover is just “start green”
+- rollback is just “stop green”
+
+**Important:** each deployment must use a **unique router name** (e.g. `hellofrom-blue` and `hellofrom-green`). Reusing the same router name on two containers is not safe.
 
 ---
 
 ## Prereqs
 
-- Docker + Docker Compose
-- Ports **80** and **443** open to the internet on this host
-- A DNS record pointing at this host (example: `auth.hellofrom.app`)
-- A valid email configured for Let’s Encrypt
+- A Linux host/VPS with Docker + Docker Compose v2
+- Ports **80** and **443** reachable from the internet (for ACME HTTP-01)
+- DNS `A` record for `hellofrom.app` → this host
+- DNS `A` record for `traefik.hellofrom.app` → this host (optional, dashboard)
+- A place to store `acme.json` on disk
 
 ---
 
-## Quick start
+## First-time setup (Let’s Encrypt storage)
 
-1. Create the ACME storage file with correct permissions:
+Traefik needs a writable file for ACME:
 
 ```bash
 mkdir -p traefik-letsencrypt
@@ -48,128 +60,128 @@ touch traefik-letsencrypt/acme.json
 chmod 600 traefik-letsencrypt/acme.json
 ```
 
-2. Update the Let’s Encrypt email in `docker-compose.yml`:
-
-```yaml
-- --certificatesresolvers.le.acme.email=you@hellofrom.app
-```
-
-3. Start Traefik:
-
-```bash
-docker compose up -d
-```
-
-4. Watch logs:
-
-```bash
-docker compose logs -f traefik
-```
-
----
-
-## Dashboard
-
-The dashboard and API are available **only from the host**:
-
-- `http://localhost:8080/dashboard/`
-
-Because we bind `127.0.0.1:8080:8080`, nothing on your LAN (or the internet) can hit it directly.
-
-If you want to view it from another machine, use SSH port forwarding:
-
-```bash
-ssh -L 8080:127.0.0.1:8080 <host>
-```
-
-Then open `http://localhost:8080/dashboard/` on your laptop.
-
 ---
 
 ## Networks
 
-This compose file creates two Docker networks:
+This repo expects these Docker networks (Compose will create them if missing):
 
-- `hf_edge`
-  Public-facing “edge” network. Traefik lives here.
+- `hf_edge` — public edge network Traefik uses to reach services
+- `hf_svc_keycloak` — internal-only network (Traefik attached so it can route)
+- `hf_svc_umami` — internal-only network (Traefik attached so it can route)
+- `hf_svc_openobserve` — internal-only network (Traefik attached so it can route)
 
-- `hf_svc_keycloak` (**internal**)
-  Private service network for Traefik ↔ Keycloak traffic.
-
-Other services can follow the same pattern:
-
-- Create a dedicated `hf_svc_<service>` internal network
-- Attach Traefik + that service to it
-- Keep DBs on separate `hf_db_<service>` internal networks (Traefik should not join DB networks)
+If you already created these networks elsewhere, keep the names consistent.
 
 ---
 
-## How other services attach
+## Usage
 
-Other stacks should:
+### Start Traefik + Blue (default live)
 
-1. Join the appropriate Traefik service network (example: `hf_svc_keycloak`)
-2. Add Traefik labels to their service container(s)
-3. Set `traefik.enable=true`
-4. Set `traefik.docker.network=hf_svc_keycloak` when the container is on multiple networks
+```bash
+docker compose --profile main up -d
+```
 
-Example (labels on a backend container):
+### Cut over to Green (Green takes traffic)
 
-```yaml
-labels:
-  - traefik.enable=true
-  - traefik.docker.network=hf_svc_keycloak
-  - traefik.http.routers.myservice.rule=Host(`auth.hellofrom.app`)
-  - traefik.http.routers.myservice.entrypoints=websecure
-  - traefik.http.routers.myservice.tls=true
-  - traefik.http.routers.myservice.tls.certresolver=le
-  - traefik.http.services.myservice.loadbalancer.server.port=8080
+```bash
+docker compose --profile green up -d
+```
+
+At this point both blue and green may be running, but green should receive requests because it has a higher router priority.
+
+### Roll back to Blue (stop Green only)
+
+Safer than `down` (doesn’t touch Traefik/Blue):
+
+```bash
+docker compose stop hellofrom_green
+docker compose rm -f hellofrom_green
 ```
 
 ---
 
-## Localhost-only middleware
+## If you really want “down green” to only remove green
 
-This compose defines a reusable middleware:
+Compose `down` is project-scoped, not profile-scoped in the way people often assume. If you want clean isolation, run **two project names**:
 
-- `hf-localonly` = allow only `127.0.0.1` / `::1`
+```bash
+# main stack (traefik + blue)
+docker compose -p hf-main --profile main up -d
 
-Other stacks can use it like:
+# green stack (just green)
+docker compose -p hf-green --profile green up -d
 
-```yaml
-labels:
-  - traefik.http.routers.some-private-thing.middlewares=hf-localonly@docker
+# remove only green stack
+docker compose -p hf-green down
 ```
 
-This is handy for “admin-only” paths that you access via SSH tunnel.
+Traefik will still see both containers and their labels, even across projects.
+
+---
+
+## Verifying which deployment is live
+
+### Check Traefik access logs
+
+Traefik is configured for JSON access logs and includes `RouterName`/`ServiceName`. You should see requests hitting either `hellofrom-blue@docker` or `hellofrom-green@docker` (depending on how you named routers).
+
+### Curl the site
+
+If you expose a simple “COLOR” response/header in your app, this is the easiest check:
+
+```bash
+curl -I https://hellofrom.app
+```
+
+---
+
+## Traefik dashboard
+
+The dashboard is routed at:
+
+- `https://traefik.hellofrom.app`
+
+It’s protected by an IP allowlist middleware (`hf-localonly`) in the compose labels. Update the allowlist to match your trusted source ranges.
 
 ---
 
 ## Troubleshooting
 
-### Certs not issuing
+### Green doesn’t take traffic
 
-- Confirm ports 80/443 are reachable from the internet.
-- Confirm DNS points to this host.
-- Check logs:
+Common causes:
 
-```bash
-docker compose logs -f traefik
-```
+- Green router has a lower/equal `priority` than blue
+- Router names collide (both containers define the same router name)
+- Green router is missing the `rule` / `entrypoints` / `tls` labels
+- Service port label doesn’t match what Bun is listening on
 
-### Dashboard returns 404
+### Let’s Encrypt isn’t issuing certs
 
-- Make sure you include the trailing slash: `/dashboard/`
-- Confirm you’re hitting `http://localhost:8080`, not `https://...`
+- Confirm port **80** is reachable (HTTP-01 challenge needs it)
+- Confirm `traefik-letsencrypt/acme.json` exists and is writable by the container
+- Check Traefik logs:
 
-### Permissions error for ACME storage
+  ```bash
+  docker logs -f traefik
+  ```
 
-- Ensure `traefik-letsencrypt/acme.json` exists and is `chmod 600`.
+### Traefik can’t reach a service
+
+- Ensure the service is attached to `hf_edge`
+- Ensure `traefik.docker.network=hf_edge` is set on the service labels (so Traefik picks the right network)
 
 ---
 
-## Notes / security posture
+## Suggested repo conventions
 
-- Docker provider is `exposedByDefault=false`, so nothing is exposed unless labeled.
-- Dashboard is bound to localhost and also protected by `hf-localonly` middleware.
-- ACME state is persisted on disk in `./traefik-letsencrypt` so restarts don’t re-issue certificates.
+- Keep blue and green entrypoints separate (`index.blue.js` vs `index.js`)
+- Always:
+
+  - unique router name per deployment
+  - same `Host()` rule on both routers
+  - higher priority for green
+
+- Treat green as ephemeral: bring it up to validate, then tear it down after cutover/rollback.
