@@ -209,5 +209,4 @@ networks:
   hf_svc_mattermost:
     name: hf_svc_mattermost
     driver: bridge
-    internal: true
     
