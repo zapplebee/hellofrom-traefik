@@ -67,6 +67,7 @@ services:
       - hf_svc_openobserve
       - hf_svc_portainer
       - hf_svc_webapp
+      - hf_svc_mattermost
 
     labels:
       - traefik.enable=true
@@ -205,3 +206,8 @@ networks:
     name: hf_svc_openobserve
     driver: bridge
     internal: true
+  hf_svc_mattermost:
+    name: hf_svc_mattermost
+    driver: bridge
+    internal: true
+    
